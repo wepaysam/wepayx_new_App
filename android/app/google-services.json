@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "714289627195",
+    "project_id": "nex-wallet-c56eb",
+    "storage_bucket": "nex-wallet-c56eb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:714289627195:android:69e8bca9c4290d49301c1e",
+        "android_client_info": {
+          "package_name": "com.nexwallet.nex_wallet"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJOwT-OAysMJV9w1Haors4OXPdRvRBe1k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
