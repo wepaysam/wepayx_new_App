@@ -11,9 +11,14 @@ import '../nex_tokens.dart';
 import '../widgets/nex_brand.dart';
 import '../widgets/nex_transaction_sheet.dart';
 import '../widgets/nex_components.dart';
+import 'nex_account_support_screens.dart';
 
 class MarketChip {
-  const MarketChip({required this.sym, required this.color, required this.change});
+  const MarketChip({
+    required this.sym,
+    required this.color,
+    required this.change,
+  });
   final String sym;
   final Color color;
   final double change;
@@ -57,6 +62,7 @@ class NexHomeScreen extends StatefulWidget {
     required this.onProfile,
     required this.onNotifications,
     required this.onAssetDetail,
+    required this.onAccountSupport,
   });
 
   final VoidCallback onReceive;
@@ -67,6 +73,7 @@ class NexHomeScreen extends StatefulWidget {
   final VoidCallback onProfile;
   final VoidCallback onNotifications;
   final void Function(String assetId) onAssetDetail;
+  final VoidCallback onAccountSupport;
 
   @override
   State<NexHomeScreen> createState() => _NexHomeScreenState();
@@ -82,13 +89,17 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
     final provider = context.watch<WalletProvider>();
     final hPad = NexLayout.horizontalPadding(context);
 
+    final sendBlocked = provider.isFeatureBlocked('withdrawal');
+    final receiveBlocked = provider.isFeatureBlocked('deposit');
+    final swapBlocked = provider.isFeatureBlocked('swap');
+
     final actions = [
-      ('Receive', 'downLeft', widget.onReceive),
-      ('Send', 'upRight', widget.onSend),
-      ('Swap', 'refresh', widget.onSwap),
-      ('Buy', 'card', widget.onBuy),
-      ('History', 'clock', widget.onHistory),
-      ('More', 'more', widget.onProfile),
+      ('Receive', 'downLeft', widget.onReceive, receiveBlocked),
+      ('Send', 'upRight', widget.onSend, sendBlocked),
+      ('Swap', 'refresh', widget.onSwap, swapBlocked),
+      ('Buy', 'card', widget.onBuy, false),
+      ('History', 'clock', widget.onHistory, false),
+      ('More', 'more', widget.onProfile, false),
     ];
 
     return ColoredBox(
@@ -121,6 +132,18 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
               ],
             ),
           ),
+          if (provider.accountStatus?.hasRestrictions == true)
+            NexAccountRestrictionBanner(
+              status: provider.accountStatus!,
+              onSupport: widget.onAccountSupport,
+            ),
+          if (provider.announcements.isNotEmpty)
+            NexAnnouncementBanner(
+              announcement: provider.announcements.firstWhere(
+                (item) => item.isHighPriority,
+                orElse: () => provider.announcements.first,
+              ),
+            ),
           Padding(
             padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 4),
             child: Row(
@@ -152,8 +175,52 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
               ),
             ),
           ),
+          if (sendBlocked)
+            Padding(
+              padding: EdgeInsets.fromLTRB(hPad, 14, hPad, 0),
+              child: Row(
+                children: [
+                  // Aligns under the middle (Send) column — left side of Send.
+                  const Spacer(flex: 1),
+                  Expanded(
+                    flex: 1,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Material(
+                        color: const Color(0xFFF59E0B).withValues(alpha: 0.16),
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: () {
+                            final status = provider.accountStatus;
+                            if (status != null) {
+                              NexAccountRestrictionBanner(
+                                status: status,
+                                onSupport: widget.onAccountSupport,
+                              ).showInfo(context);
+                            }
+                          },
+                          child: const SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: Center(
+                              child: NexIcon(
+                                'info',
+                                size: 14,
+                                color: Color(0xFFF59E0B),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const Spacer(flex: 1),
+                ],
+              ),
+            ),
           Padding(
-            padding: EdgeInsets.fromLTRB(hPad, 20, hPad, 0),
+            padding: EdgeInsets.fromLTRB(hPad, sendBlocked ? 8 : 20, hPad, 0),
             child: GridView.count(
               crossAxisCount: 3,
               shrinkWrap: true,
@@ -162,28 +229,53 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
               crossAxisSpacing: 10,
               childAspectRatio: 1.15,
               children: actions.map((a) {
+                final blocked = a.$4;
+                final iconColor = blocked ? t.muted : t.text;
+                final labelColor = blocked ? t.muted : t.text2;
                 return Material(
                   color: t.dark
-                      ? Colors.white.withValues(alpha: 0.05)
-                      : Colors.white,
+                      ? Colors.white.withValues(alpha: blocked ? 0.03 : 0.05)
+                      : (blocked ? const Color(0xFFF8FAFC) : Colors.white),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                     side: BorderSide(
-                      color: t.dark ? Colors.transparent : t.cardBorder,
+                      color: blocked
+                          ? const Color(0xFFF59E0B).withValues(alpha: 0.35)
+                          : (t.dark ? Colors.transparent : t.cardBorder),
                     ),
                   ),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(12),
                     onTap: a.$3,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    child: Stack(
                       children: [
-                        NexIcon(a.$2, size: 20, color: t.text),
-                        const SizedBox(height: 6),
-                        Text(
-                          a.$1,
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: t.text2),
+                        Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              NexIcon(a.$2, size: 20, color: iconColor),
+                              const SizedBox(height: 6),
+                              Text(
+                                a.$1,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: labelColor,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
+                        if (blocked)
+                          const Positioned(
+                            top: 8,
+                            right: 8,
+                            child: NexIcon(
+                              'lock',
+                              size: 12,
+                              color: Color(0xFFF59E0B),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -297,7 +389,10 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               children: [
                 NexCard(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                   child: SizedBox(
                     width: 78,
                     child: Column(
@@ -313,7 +408,12 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
                         ),
                         Text(
                           provider.fearGreed?.shortLabel ?? 'FEAR',
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: t.muted, letterSpacing: 1),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: t.muted,
+                            letterSpacing: 1,
+                          ),
                         ),
                       ],
                     ),
@@ -326,7 +426,10 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
                   return Padding(
                     padding: const EdgeInsets.only(right: 12),
                     child: NexCard(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                       child: SizedBox(
                         width: 78,
                         child: Column(
@@ -334,13 +437,22 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
                           children: [
                             CoinLogo(symbol: c.sym, color: c.color, size: 28),
                             const SizedBox(height: 4),
-                            Text(c.sym, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.text)),
+                            Text(
+                              c.sym,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: t.text,
+                              ),
+                            ),
                             Text(
                               '${ch >= 0 ? '+' : ''}${Formatters.percent(ch)}%',
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w500,
-                                color: ch >= 0 ? const Color(0xFF22C55E) : const Color(0xFFF87171),
+                                color: ch >= 0
+                                    ? const Color(0xFF22C55E)
+                                    : const Color(0xFFF87171),
                               ),
                             ),
                           ],
@@ -374,7 +486,12 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
                               : Colors.transparent,
                           borderRadius: BorderRadius.circular(12),
                           boxShadow: active && !t.dark
-                              ? const [BoxShadow(color: Color(0x14000000), blurRadius: 4)]
+                              ? const [
+                                  BoxShadow(
+                                    color: Color(0x14000000),
+                                    blurRadius: 4,
+                                  ),
+                                ]
                               : null,
                         ),
                         alignment: Alignment.center,
@@ -412,7 +529,13 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(item.definition.name, style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
+                          Text(
+                            item.definition.name,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: t.text,
+                            ),
+                          ),
                           Text(
                             '${Formatters.amount(item.amount)} ${item.definition.symbol}${tab == 'accounts' && item.definition.networks.length > 1 ? ' · ${item.definition.networks.length} networks' : ''}',
                             style: TextStyle(fontSize: 12, color: t.muted),
@@ -427,7 +550,10 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
                           provider.balanceVisible
                               ? '\$${Formatters.usd(item.usd)}'
                               : '••••',
-                          style: TextStyle(fontWeight: FontWeight.w600, color: t.text),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: t.text,
+                          ),
                         ),
                         Text(
                           provider.balanceVisible
@@ -469,7 +595,9 @@ class _NexMarketsScreenState extends State<NexMarketsScreen> {
     final t = NexThemeScope.of(context);
     final provider = context.watch<WalletProvider>();
     final q = _query.text.toLowerCase();
-    final rows = marketListSeed.where((r) => ('${r.$1}${r.$2}').toLowerCase().contains(q));
+    final rows = marketListSeed.where(
+      (r) => ('${r.$1}${r.$2}').toLowerCase().contains(q),
+    );
 
     return ColoredBox(
       color: t.appBg,
@@ -511,8 +639,8 @@ class _NexMarketsScreenState extends State<NexMarketsScreen> {
                     provider.pricesStale
                         ? 'Prices may be delayed'
                         : provider.pricesSource == 'coinbase'
-                            ? 'Live prices · Coinbase'
-                            : 'Live prices · CoinMarketCap',
+                        ? 'Live prices · Coinbase'
+                        : 'Live prices · CoinMarketCap',
                     style: TextStyle(fontSize: 12, color: t.muted),
                   ),
                 ),
@@ -541,60 +669,87 @@ class _NexMarketsScreenState extends State<NexMarketsScreen> {
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 children: [
-                ...rows.toList().asMap().entries.map((entry) {
-                  final i = entry.key;
-                  final row = entry.value;
-                  final live = provider.prices[row.$1];
-                  final price = live?.price ?? assetBySymbol(row.$1).defaultPrice;
-                  final ch = live?.change24h ?? 0;
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 28,
-                          child: Text('${i + 1}', style: TextStyle(fontSize: 13, color: t.muted)),
-                        ),
-                        CoinLogo(symbol: row.$1, color: row.$3, size: 36),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                  ...rows.toList().asMap().entries.map((entry) {
+                    final i = entry.key;
+                    final row = entry.value;
+                    final live = provider.prices[row.$1];
+                    final price =
+                        live?.price ?? assetBySymbol(row.$1).defaultPrice;
+                    final ch = live?.change24h ?? 0;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 28,
+                            child: Text(
+                              '${i + 1}',
+                              style: TextStyle(fontSize: 13, color: t.muted),
+                            ),
+                          ),
+                          CoinLogo(symbol: row.$1, color: row.$3, size: 36),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  row.$2,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: t.text,
+                                  ),
+                                ),
+                                Text(
+                                  row.$1,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: t.muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              Text(row.$2, style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
-                              Text(row.$1, style: TextStyle(fontSize: 12, color: t.muted)),
+                              Text(
+                                '\$${Formatters.usd(price)}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: t.text,
+                                ),
+                              ),
+                              Text(
+                                '${ch > 0 ? '+' : ''}${Formatters.percent(ch)}%',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: ch > 0
+                                      ? const Color(0xFF22C55E)
+                                      : ch < 0
+                                      ? const Color(0xFFF87171)
+                                      : t.muted,
+                                ),
+                              ),
                             ],
                           ),
+                        ],
+                      ),
+                    );
+                  }),
+                  if (rows.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 40),
+                      child: Center(
+                        child: Text(
+                          'No coins match "${_query.text}"',
+                          style: TextStyle(color: t.muted),
                         ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text('\$${Formatters.usd(price)}', style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
-                            Text(
-                              '${ch > 0 ? '+' : ''}${Formatters.percent(ch)}%',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: ch > 0
-                                    ? const Color(0xFF22C55E)
-                                    : ch < 0
-                                        ? const Color(0xFFF87171)
-                                        : t.muted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                      ),
                     ),
-                  );
-                }),
-                if (rows.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 40),
-                    child: Center(child: Text('No coins match "${_query.text}"', style: TextStyle(color: t.muted))),
-                  ),
-              ],
-            ),
+                ],
+              ),
             ),
           ),
         ],
@@ -642,7 +797,11 @@ class NexWalletTabScreen extends StatelessWidget {
                     provider.balanceVisible
                         ? '\$${Formatters.usd(provider.totalUsd)}'
                         : '••••••',
-                    style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: t.text),
+                    style: TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.w800,
+                      color: t.text,
+                    ),
                   ),
                 ],
               ),
@@ -662,13 +821,23 @@ class NexWalletTabScreen extends StatelessWidget {
                 onTap: () => onAssetDetail(item.definition.id),
                 child: Row(
                   children: [
-                    CoinLogo(symbol: item.definition.symbol, color: item.definition.color, size: 44),
+                    CoinLogo(
+                      symbol: item.definition.symbol,
+                      color: item.definition.color,
+                      size: 44,
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(item.definition.name, style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
+                          Text(
+                            item.definition.name,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: t.text,
+                            ),
+                          ),
                           Wrap(
                             spacing: 4,
                             runSpacing: 4,
@@ -682,7 +851,13 @@ class NexWalletTabScreen extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text('\$${Formatters.usd(item.usd)}', style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
+                        Text(
+                          '\$${Formatters.usd(item.usd)}',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: t.text,
+                          ),
+                        ),
                         Text(
                           '${Formatters.amount(item.amount)} ${item.definition.symbol}',
                           style: TextStyle(fontSize: 12, color: t.muted),
@@ -744,7 +919,10 @@ class _NexActivityScreenState extends State<NexActivityScreen> {
                       borderRadius: BorderRadius.circular(999),
                       onTap: () => setState(() => filter = f),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
                         child: Text(
                           f,
                           style: TextStyle(
@@ -767,7 +945,12 @@ class _NexActivityScreenState extends State<NexActivityScreen> {
                 if (rows.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 48),
-                    child: Center(child: Text('Nothing here yet.', style: TextStyle(color: t.muted))),
+                    child: Center(
+                      child: Text(
+                        'Nothing here yet.',
+                        style: TextStyle(color: t.muted),
+                      ),
+                    ),
                   )
                 else
                   ...rows.map((x) => NexActivityListTile(tx: x)),
@@ -793,8 +976,8 @@ class NexActivityListTile extends StatelessWidget {
     final meta = tx.type == 'received'
         ? ('downLeft', const Color(0xFF22C55E), 'Received')
         : tx.type == 'sent'
-            ? ('upRight', const Color(0xFFEF4444), 'Sent')
-            : ('refresh', const Color(0xFF3B82F6), 'Swapped');
+        ? ('upRight', const Color(0xFFEF4444), 'Sent')
+        : ('refresh', const Color(0xFF3B82F6), 'Swapped');
     final statusColor = txStatusColor(tx.status);
 
     return Padding(
@@ -818,13 +1001,22 @@ class NexActivityListTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('${meta.$3} ${asset.symbol}', style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
+                  Text(
+                    '${meta.$3} ${asset.symbol}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: t.text,
+                    ),
+                  ),
                   Row(
                     children: [
                       NetBadge(network: tx.network),
                       const SizedBox(width: 6),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: statusColor.withValues(alpha: 0.18),
                           borderRadius: BorderRadius.circular(999),
@@ -853,8 +1045,8 @@ class NexActivityListTile extends StatelessWidget {
                     color: tx.type == 'received'
                         ? const Color(0xFF22C55E)
                         : tx.type == 'sent'
-                            ? const Color(0xFFF87171)
-                            : t.text,
+                        ? const Color(0xFFF87171)
+                        : t.text,
                   ),
                 ),
                 Text(
@@ -924,7 +1116,11 @@ class NexAssetDetailScreen extends StatelessWidget {
                   padding: const EdgeInsets.all(20),
                   child: Row(
                     children: [
-                      CoinLogo(symbol: definition.symbol, color: definition.color, size: 48),
+                      CoinLogo(
+                        symbol: definition.symbol,
+                        color: definition.color,
+                        size: 48,
+                      ),
                       const SizedBox(width: 14),
                       Expanded(
                         child: Column(
@@ -957,12 +1153,20 @@ class NexAssetDetailScreen extends StatelessWidget {
                     child: NexLabel('Balance by network'),
                   ),
                   ...definition.networks.map((network) {
-                    final rows = networkBalances.where((row) => row.network == network);
-                    final amount = rows.fold(0.0, (sum, row) => sum + row.balance);
+                    final rows = networkBalances.where(
+                      (row) => row.network == network,
+                    );
+                    final amount = rows.fold(
+                      0.0,
+                      (sum, row) => sum + row.balance,
+                    );
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: NexCard(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
                         child: Row(
                           children: [
                             NetworkIcon(network: network, size: 32),
@@ -971,10 +1175,19 @@ class NexAssetDetailScreen extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(network, style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
+                                  Text(
+                                    network,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: t.text,
+                                    ),
+                                  ),
                                   Text(
                                     networkLabel(network),
-                                    style: TextStyle(fontSize: 12, color: t.muted),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: t.muted,
+                                    ),
                                   ),
                                 ],
                               ),

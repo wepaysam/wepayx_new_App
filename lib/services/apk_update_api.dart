@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 
 import '../config/api_config.dart';
@@ -18,18 +20,39 @@ class ApkUpdateApi {
   );
 
   Future<AppUpdateInfo> fetchUpdate() async {
-    final response = await _dio.get<Map<String, dynamic>>(ApiConfig.appUpdateUrl);
+    final platform = Platform.isIOS
+        ? 'ios'
+        : Platform.isAndroid
+        ? 'android'
+        : 'other';
+
+    final response = await _dio.get<Map<String, dynamic>>(
+      ApiConfig.appUpdateUrl,
+      queryParameters: {'platform': platform},
+      options: Options(
+        headers: {
+          'Accept': 'application/json',
+          'X-App-Platform': platform,
+        },
+      ),
+    );
     final data = response.data ?? {};
     final raw = data['update'] as Map<String, dynamic>? ?? data;
     final info = AppUpdateInfo.fromJson(raw);
+
+    // Only Android responses may carry an APK download URL.
+    final apkUrl = platform == 'android'
+        ? ApiConfig.resolveApkUrl(info.apkUrl)
+        : '';
+
     return AppUpdateInfo(
       latestVersion: info.latestVersion,
       latestBuild: info.latestBuild,
       minBuild: info.minBuild,
-      apkUrl: ApiConfig.resolveApkUrl(info.apkUrl),
+      apkUrl: apkUrl,
       releaseNotes: info.releaseNotes,
-      forceUpdate: info.forceUpdate,
-      platform: info.platform,
+      forceUpdate: platform == 'android' && info.forceUpdate,
+      platform: info.platform.isNotEmpty ? info.platform : platform,
     );
   }
 }

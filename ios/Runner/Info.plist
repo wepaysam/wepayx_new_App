@@ -51,8 +51,6 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan wallet QR codes when sending crypto.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Save deposit QR images to your photo library.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -70,5 +68,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSFaceIDUsageDescription</key>
+	<string>NEX Wallet uses Face ID to unlock the app and confirm sensitive actions like sending funds.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>NexWallet needs access to your photo library to save QR codes and transaction images.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>NexWallet needs permission to save QR codes and receipts to your photo library.</string>
 </dict>
 </plist>

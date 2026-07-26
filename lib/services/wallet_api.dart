@@ -33,11 +33,14 @@ class WalletApi {
     required String password,
     String? name,
   }) async {
-    final data = await _client.post('/api/signup', body: {
-      'email': email,
-      'password': password,
-      if (name != null && name.isNotEmpty) 'name': name,
-    });
+    final data = await _client.post(
+      '/api/signup',
+      body: {
+        'email': email,
+        'password': password,
+        if (name != null && name.isNotEmpty) 'name': name,
+      },
+    );
     return AuthSession.fromJson(data);
   }
 
@@ -45,10 +48,10 @@ class WalletApi {
     required String email,
     required String password,
   }) async {
-    final data = await _client.post('/api/login', body: {
-      'email': email,
-      'password': password,
-    });
+    final data = await _client.post(
+      '/api/login',
+      body: {'email': email, 'password': password},
+    );
     return AuthSession.fromJson(data);
   }
 
@@ -60,10 +63,10 @@ class WalletApi {
     required String currentPassword,
     required String newPassword,
   }) async {
-    final data = await _client.post('/api/change-password', body: {
-      'currentPassword': currentPassword,
-      'newPassword': newPassword,
-    });
+    final data = await _client.post(
+      '/api/change-password',
+      body: {'currentPassword': currentPassword, 'newPassword': newPassword},
+    );
     if (data['ok'] != true) {
       throw Exception(data['error']?.toString() ?? 'Password change failed');
     }
@@ -96,10 +99,10 @@ class WalletApi {
     required String asset,
     required String network,
   }) async {
-    final data = await _client.post('/api/deposit-address', body: {
-      'asset': asset,
-      'network': network,
-    });
+    final data = await _client.post(
+      '/api/deposit-address',
+      body: {'asset': asset, 'network': network},
+    );
     return DepositAddressResult.fromJson(data);
   }
 
@@ -120,7 +123,9 @@ class WalletApi {
     return null;
   }
 
-  Future<List<PopupNotification>> popupNotifications({bool consume = true}) async {
+  Future<List<PopupNotification>> popupNotifications({
+    bool consume = true,
+  }) async {
     final data = await _client.get(
       '/api/popup-notifications',
       queryParameters: consume ? {'consume': '1'} : null,
@@ -135,10 +140,53 @@ class WalletApi {
     required String token,
     required String platform,
   }) async {
-    await _client.post('/api/device-token', body: {
-      'token': token,
-      'platform': platform,
-    });
+    await _client.post(
+      '/api/device-token',
+      body: {'token': token, 'platform': platform},
+    );
+  }
+
+  Future<AccountStatusInfo> accountStatus() async {
+    final data = await _client.get('/api/account-status');
+    final raw = data['accountStatus'];
+    if (raw is! Map<String, dynamic>) {
+      throw Exception('Invalid account status response');
+    }
+    return AccountStatusInfo.fromJson(raw);
+  }
+
+  Future<SupportTicket> createSupportTicket({
+    required String category,
+    required String subject,
+    required String message,
+    String? blockedAction,
+  }) async {
+    final data = await _client.post(
+      '/api/support/tickets',
+      body: {
+        'category': category,
+        'subject': subject,
+        'message': message,
+        if (blockedAction != null && blockedAction.isNotEmpty)
+          'blockedAction': blockedAction,
+      },
+    );
+    final raw = data['ticket'];
+    if (raw is! Map<String, dynamic>) {
+      throw Exception('Invalid support ticket response');
+    }
+    return SupportTicket.fromJson(raw);
+  }
+
+  Future<List<AppAnnouncement>> announcements({int limit = 3}) async {
+    final data = await _client.get(
+      '/api/announcements',
+      queryParameters: {'limit': limit},
+    );
+    return (data['announcements'] as List<dynamic>? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(AppAnnouncement.fromJson)
+        .toList();
   }
 
   Future<WithdrawalResult> withdrawalRequest({
@@ -161,8 +209,8 @@ class WalletApi {
     final payload = data['withdrawal'] is Map<String, dynamic>
         ? data['withdrawal'] as Map<String, dynamic>
         : data['request'] is Map<String, dynamic>
-            ? data['request'] as Map<String, dynamic>
-            : data;
+        ? data['request'] as Map<String, dynamic>
+        : data;
     return WithdrawalResult.fromJson(payload);
   }
 
@@ -175,15 +223,18 @@ class WalletApi {
     bool fixed = false,
     bool reverse = false,
   }) async {
-    final data = await _client.post('/api/swap-estimate', body: {
-      'fromAsset': fromAsset,
-      'fromNetwork': fromNetwork,
-      'toAsset': toAsset,
-      'toNetwork': toNetwork,
-      'amount': amount,
-      'fixed': fixed,
-      'reverse': reverse,
-    });
+    final data = await _client.post(
+      '/api/swap-estimate',
+      body: {
+        'fromAsset': fromAsset,
+        'fromNetwork': fromNetwork,
+        'toAsset': toAsset,
+        'toNetwork': toNetwork,
+        'amount': amount,
+        'fixed': fixed,
+        'reverse': reverse,
+      },
+    );
     return SwapEstimateResult.fromJson(data);
   }
 
@@ -197,26 +248,29 @@ class WalletApi {
     bool fixed = false,
     bool reverse = false,
   }) async {
-    return _client.post('/api/swap-exchange', body: {
-      'fromAsset': fromAsset,
-      'fromNetwork': fromNetwork,
-      'toAsset': toAsset,
-      'toNetwork': toNetwork,
-      'amount': amount,
-      if (addressTo != null) 'addressTo': addressTo,
-      'fixed': fixed,
-      'reverse': reverse,
-    });
+    return _client.post(
+      '/api/swap-exchange',
+      body: {
+        'fromAsset': fromAsset,
+        'fromNetwork': fromNetwork,
+        'toAsset': toAsset,
+        'toNetwork': toNetwork,
+        'amount': amount,
+        if (addressTo != null) 'addressTo': addressTo,
+        'fixed': fixed,
+        'reverse': reverse,
+      },
+    );
   }
 
   Future<List<WalletEvent>> recordAction({
     required String action,
     String? detail,
   }) async {
-    final data = await _client.post('/api/action', body: {
-      'action': action,
-      if (detail != null) 'detail': detail,
-    });
+    final data = await _client.post(
+      '/api/action',
+      body: {'action': action, if (detail != null) 'detail': detail},
+    );
     return (data['events'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()
         .map(WalletEvent.fromJson)

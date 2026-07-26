@@ -1,8 +1,5 @@
 class CryptoPrice {
-  const CryptoPrice({
-    required this.price,
-    this.change24h,
-  });
+  const CryptoPrice({required this.price, this.change24h});
 
   final double price;
   final double? change24h;
@@ -10,7 +7,9 @@ class CryptoPrice {
   factory CryptoPrice.fromJson(Map<String, dynamic> json) {
     return CryptoPrice(
       price: _toDouble(json['price']),
-      change24h: json['change24h'] == null ? null : _toDouble(json['change24h']),
+      change24h: json['change24h'] == null
+          ? null
+          : _toDouble(json['change24h']),
     );
   }
 
@@ -37,10 +36,8 @@ class CryptoPricesSnapshot {
     final raw = json['prices'] as Map<String, dynamic>? ?? {};
     return CryptoPricesSnapshot(
       prices: raw.map(
-        (key, value) => MapEntry(
-          key,
-          CryptoPrice.fromJson(value as Map<String, dynamic>),
-        ),
+        (key, value) =>
+            MapEntry(key, CryptoPrice.fromJson(value as Map<String, dynamic>)),
       ),
       updatedAt: json['updatedAt'] as String?,
       source: json['source'] as String?,
@@ -107,7 +104,8 @@ class WithdrawalFeeInfo {
       symbol: (json['symbol'] as String? ?? '').toUpperCase(),
       type: json['type'] as String? ?? 'fixed',
       fee: json['fee'] == null ? null : _toDouble(json['fee']),
-      display: json['display'] as String? ??
+      display:
+          json['display'] as String? ??
           json['feeDisplay'] as String? ??
           json['feeLabel'] as String? ??
           '',
@@ -204,10 +202,7 @@ class WithdrawalResult {
 }
 
 class FearGreedIndex {
-  const FearGreedIndex({
-    required this.value,
-    required this.classification,
-  });
+  const FearGreedIndex({required this.value, required this.classification});
 
   final int value;
   final String classification;
@@ -258,12 +253,102 @@ class AppUpdateInfo {
   }
 }
 
-class SwapEstimateResult {
-  const SwapEstimateResult({
-    this.estimate,
-    this.range,
-    this.rangeError,
+class AccountStatusInfo {
+  const AccountStatusInfo({
+    required this.status,
+    required this.isRestricted,
+    required this.isFrozen,
+    required this.message,
+    required this.blockedFeatures,
+    required this.affectedFeatures,
+    required this.supportRequired,
   });
+
+  final String status;
+  final bool isRestricted;
+  final bool isFrozen;
+  final String message;
+  final Map<String, bool> blockedFeatures;
+  final List<String> affectedFeatures;
+  final bool supportRequired;
+
+  bool get hasRestrictions => isRestricted || isFrozen;
+
+  bool blocks(String feature) => blockedFeatures[feature] == true;
+
+  factory AccountStatusInfo.fromJson(Map<String, dynamic> json) {
+    final rawBlocked = json['blockedFeatures'];
+    final blocked = <String, bool>{};
+    if (rawBlocked is Map) {
+      rawBlocked.forEach((key, value) {
+        blocked['$key'] = value == true;
+      });
+    }
+
+    return AccountStatusInfo(
+      status: json['status']?.toString() ?? 'active',
+      isRestricted: json['isRestricted'] == true,
+      isFrozen: json['isFrozen'] == true,
+      message: json['message']?.toString() ?? '',
+      blockedFeatures: blocked,
+      affectedFeatures: (json['affectedFeatures'] as List<dynamic>? ?? [])
+          .map((item) => '$item')
+          .toList(),
+      supportRequired: json['supportRequired'] == true,
+    );
+  }
+}
+
+class SupportTicket {
+  const SupportTicket({
+    required this.publicId,
+    required this.status,
+    required this.priority,
+  });
+
+  final String publicId;
+  final String status;
+  final String priority;
+
+  factory SupportTicket.fromJson(Map<String, dynamic> json) {
+    return SupportTicket(
+      publicId: json['publicId']?.toString() ?? '',
+      status: json['status']?.toString() ?? 'open',
+      priority: json['priority']?.toString() ?? 'normal',
+    );
+  }
+}
+
+class AppAnnouncement {
+  const AppAnnouncement({
+    required this.title,
+    required this.body,
+    required this.kind,
+    required this.priority,
+    required this.requiresAck,
+  });
+
+  final String title;
+  final String body;
+  final String kind;
+  final String priority;
+  final bool requiresAck;
+
+  bool get isHighPriority => priority.toLowerCase() == 'high';
+
+  factory AppAnnouncement.fromJson(Map<String, dynamic> json) {
+    return AppAnnouncement(
+      title: json['title']?.toString() ?? 'Announcement',
+      body: json['body']?.toString() ?? '',
+      kind: json['kind']?.toString() ?? 'info',
+      priority: json['priority']?.toString() ?? 'normal',
+      requiresAck: json['requiresAck'] == true,
+    );
+  }
+}
+
+class SwapEstimateResult {
+  const SwapEstimateResult({this.estimate, this.range, this.rangeError});
 
   final Map<String, dynamic>? estimate;
   final Map<String, dynamic>? range;

@@ -7,9 +7,12 @@ import 'package:provider/provider.dart';
 import '../services/security_service.dart';
 import '../services/notification_poller.dart';
 import '../providers/wallet_provider.dart';
+import '../models/api_models.dart';
 import 'nex_tokens.dart';
 import 'nex_layout.dart';
 import 'screens/nex_auth_screens.dart';
+import 'screens/nex_account_support_screens.dart';
+import 'screens/nex_address_book_screens.dart';
 import 'screens/nex_flow_screens.dart';
 import 'screens/nex_tab_screens.dart';
 import 'widgets/nex_brand.dart';
@@ -60,6 +63,70 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
     setState(() => stack = [...stack, NexRoute(screen, params)]);
   }
 
+  Future<void> _openWalletAction(
+    WalletProvider provider, {
+    required String feature,
+    required String screen,
+  }) async {
+    // Capture theme tokens before the async refresh — notifyListeners() can
+    // rebuild ancestors and make InheritedWidget lookups fail on old context.
+    final tokens = provider.isDark
+        ? NexTokens.darkTheme()
+        : NexTokens.lightTheme();
+    final messenger = ScaffoldMessenger.maybeOf(context);
+
+    await provider.refreshAccountFeatures(force: true);
+    if (!mounted) return;
+
+    if (!provider.isFeatureBlocked(feature)) {
+      navigate(screen);
+      return;
+    }
+    _showNotAllowedNotice(
+      provider,
+      feature,
+      tokens: tokens,
+      messenger: messenger,
+    );
+  }
+
+  void _showNotAllowedNotice(
+    WalletProvider provider,
+    String feature, {
+    required NexTokens tokens,
+    ScaffoldMessengerState? messenger,
+  }) {
+    final status = provider.accountStatus;
+    final detail = NexAccountRestrictionBanner.detailText(status);
+
+    final host = messenger ?? ScaffoldMessenger.maybeOf(context);
+    if (host == null) return;
+
+    host.clearSnackBars();
+    host.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: tokens.cardBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: tokens.cardBorder),
+        ),
+        content: Text(
+          detail,
+          style: TextStyle(color: tokens.text, height: 1.35),
+        ),
+        action: status?.supportRequired == true
+            ? SnackBarAction(
+                label: 'Support',
+                textColor: tokens.navActive,
+                onPressed: () =>
+                    navigate('support', {'blockedAction': feature}),
+              )
+            : null,
+      ),
+    );
+  }
+
   void goBack() {
     if (stack.length <= 1) return;
     setState(() => stack = stack.sublist(0, stack.length - 1));
@@ -86,7 +153,9 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
       return;
     }
 
-    if (provider.user != null && current.screen != 'home' && current.screen != 'landing') {
+    if (provider.user != null &&
+        current.screen != 'home' &&
+        current.screen != 'landing') {
       setTab('home');
     }
   }
@@ -107,7 +176,12 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
   }
 
   void replace(String screen, [Map<String, dynamic> params = const {}]) {
-    setState(() => stack = [...stack.sublist(0, stack.length - 1), NexRoute(screen, params)]);
+    setState(
+      () => stack = [
+        ...stack.sublist(0, stack.length - 1),
+        NexRoute(screen, params),
+      ],
+    );
   }
 
   @override
@@ -146,15 +220,36 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
       });
     }
 
-    final tokens = provider.isDark ? NexTokens.darkTheme() : NexTokens.lightTheme();
+    final tokens = provider.isDark
+        ? NexTokens.darkTheme()
+        : NexTokens.lightTheme();
     const tabs = {'home', 'markets', 'wallet-tab', 'activity', 'profile'};
     final showNav = tabs.contains(current.screen);
-    final canExitApp = _canExitApp(provider);
+    final authScreens = {'landing', 'login', 'signup', 'pin-setup'};
+    AppAnnouncement? pinnedAnnouncement;
+    if (provider.user != null &&
+        !authScreens.contains(current.screen) &&
+        provider.announcements.isNotEmpty) {
+      // Pinned notices cannot be closed locally — they stay until the admin
+      // deletes them on the backend. Prefer requiresAck / high priority.
+      for (final item in provider.announcements) {
+        if (item.requiresAck || item.isHighPriority) {
+          pinnedAnnouncement = item;
+          break;
+        }
+      }
+      // Any active announcement is treated as non-dismissible.
+      pinnedAnnouncement ??= provider.announcements.first;
+    }
+    final canExitApp = pinnedAnnouncement == null && _canExitApp(provider);
 
     return PopScope(
       canPop: canExitApp,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _handleSystemBack(provider);
+        if (!didPop) {
+          if (pinnedAnnouncement != null) return;
+          _handleSystemBack(provider);
+        }
       },
       child: NexThemeScope(
         tokens: tokens,
@@ -168,13 +263,10 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
                   children: [
                     Expanded(child: _buildScreen(provider)),
                     if (showNav)
-                      NexBottomNav(
-                        current: current.screen,
-                        onSelect: setTab,
-                      ),
+                      NexBottomNav(current: current.screen, onSelect: setTab),
                   ],
                 ),
-                if (provider.activePopup != null)
+                if (provider.activePopup != null && pinnedAnnouncement == null)
                   Positioned(
                     top: 8,
                     left: NexLayout.horizontalPadding(context),
@@ -183,6 +275,12 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
                       title: provider.activePopup!.title,
                       body: provider.activePopup!.body ?? '',
                       onClose: provider.dismissPopup,
+                    ),
+                  ),
+                if (pinnedAnnouncement != null)
+                  Positioned.fill(
+                    child: NexPinnedAnnouncementOverlay(
+                      announcement: pinnedAnnouncement,
                     ),
                   ),
               ],
@@ -201,27 +299,31 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
           onLogin: () => navigate('login'),
         );
       case 'signup':
-        return NexSignupScreen(
-          onBack: goBack,
-          onSuccess: _goHomeOrPinSetup,
-        );
+        return NexSignupScreen(onBack: goBack, onSuccess: _goHomeOrPinSetup);
       case 'login':
-        return NexLoginScreen(
-          onBack: goBack,
-          onSuccess: _goHomeOrPinSetup,
-        );
+        return NexLoginScreen(onBack: goBack, onSuccess: _goHomeOrPinSetup);
       case 'pin-setup':
         return NexPinSetupScreen(onComplete: () => setTab('home'));
       case 'home':
         return NexHomeScreen(
-          onReceive: () => navigate('receive-asset'),
-          onSend: () => navigate('send-asset'),
-          onSwap: () => navigate('swap'),
+          onReceive: () => _openWalletAction(
+            provider,
+            feature: 'deposit',
+            screen: 'receive-asset',
+          ),
+          onSend: () => _openWalletAction(
+            provider,
+            feature: 'withdrawal',
+            screen: 'send-asset',
+          ),
+          onSwap: () =>
+              _openWalletAction(provider, feature: 'swap', screen: 'swap'),
           onBuy: () => navigate('buy'),
           onHistory: () => setTab('activity'),
           onProfile: () => setTab('profile'),
-          onNotifications: () => navigate('notifications'),
+          onNotifications: () => navigate('announcements'),
           onAssetDetail: (id) => navigate('asset-detail', {'asset': id}),
+          onAccountSupport: () => navigate('support'),
         );
       case 'markets':
         return const NexMarketsScreen();
@@ -238,18 +340,33 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
             setState(() => stack = [const NexRoute('landing')]);
           },
           onActivity: () => setTab('activity'),
+          onSupport: () => navigate('support'),
+          onAnnouncements: () => navigate('announcements'),
+          onAddressBook: () => navigate('address-book'),
         );
       case 'receive-asset':
       case 'receive-network':
       case 'receive-qr':
         return NexReceiveFlow(onBack: goBack);
       case 'send-asset':
-        return NexSendFlow(key: const ValueKey('nex-send-flow'), onBack: goBack);
+        return NexSendFlow(
+          key: const ValueKey('nex-send-flow'),
+          onBack: goBack,
+        );
       case 'swap':
         return NexSwapFlow(onBack: goBack);
       case 'buy':
       case 'notifications':
         return _PlaceholderFlow(title: current.screen, onBack: goBack);
+      case 'support':
+        return NexSupportTicketScreen(
+          onBack: goBack,
+          blockedAction: current.params['blockedAction'] as String?,
+        );
+      case 'announcements':
+        return NexAnnouncementsScreen(onBack: goBack);
+      case 'address-book':
+        return NexAddressBookScreen(onBack: goBack);
       case 'asset-detail':
         return NexAssetDetailScreen(
           assetId: current.params['asset'] as String? ?? 'usdt',
@@ -257,14 +374,24 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
         );
       default:
         return NexHomeScreen(
-          onReceive: () => navigate('receive-asset'),
-          onSend: () => navigate('send-asset'),
-          onSwap: () => navigate('swap'),
+          onReceive: () => _openWalletAction(
+            provider,
+            feature: 'deposit',
+            screen: 'receive-asset',
+          ),
+          onSend: () => _openWalletAction(
+            provider,
+            feature: 'withdrawal',
+            screen: 'send-asset',
+          ),
+          onSwap: () =>
+              _openWalletAction(provider, feature: 'swap', screen: 'swap'),
           onBuy: () => navigate('buy'),
           onHistory: () => setTab('activity'),
           onProfile: () => setTab('profile'),
-          onNotifications: () => navigate('notifications'),
+          onNotifications: () => navigate('announcements'),
           onAssetDetail: (id) => navigate('asset-detail', {'asset': id}),
+          onAccountSupport: () => navigate('support'),
         );
     }
   }
@@ -302,44 +429,48 @@ class NexMaterialApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<WalletProvider>(
-      builder: (context, provider, _) {
-        return MaterialApp(
-          title: 'NEX Wallet',
-          debugShowCheckedModeBanner: false,
-          builder: (context, child) {
-            final mq = MediaQuery.of(context);
-            return MediaQuery(
-              data: mq.copyWith(
-                textScaler: mq.textScaler.clamp(minScaleFactor: 0.9, maxScaleFactor: 1.1),
-              ),
-              child: child ?? const SizedBox.shrink(),
-            );
-          },
-          theme: ThemeData(
-            brightness: Brightness.light,
-            scaffoldBackgroundColor: const Color(0xFFF4F7FF),
-            textTheme: GoogleFonts.interTextTheme(),
-            snackBarTheme: const SnackBarThemeData(
-              backgroundColor: Color(0xFF0F172A),
-              contentTextStyle: TextStyle(color: Colors.white),
+    // Only rebuild themeMode on dark/light changes — not on every wallet
+    // refresh. Recreating MaterialApp on each notifyListeners() was breaking
+    // async callbacks that still held the old BuildContext.
+    final isDark = context.select<WalletProvider, bool>((p) => p.isDark);
+
+    return MaterialApp(
+      title: 'NEX Wallet',
+      debugShowCheckedModeBanner: false,
+      builder: (context, child) {
+        final mq = MediaQuery.of(context);
+        return MediaQuery(
+          data: mq.copyWith(
+            textScaler: mq.textScaler.clamp(
+              minScaleFactor: 0.9,
+              maxScaleFactor: 1.1,
             ),
-            useMaterial3: true,
           ),
-          darkTheme: ThemeData(
-            brightness: Brightness.dark,
-            scaffoldBackgroundColor: const Color(0xFF0A0A0A),
-            textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
-            snackBarTheme: const SnackBarThemeData(
-              backgroundColor: Color(0xFF232325),
-              contentTextStyle: TextStyle(color: Colors.white),
-            ),
-            useMaterial3: true,
-          ),
-          themeMode: provider.isDark ? ThemeMode.dark : ThemeMode.light,
-          home: NexAppRoot(poller: poller),
+          child: child ?? const SizedBox.shrink(),
         );
       },
+      theme: ThemeData(
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: const Color(0xFFF4F7FF),
+        textTheme: GoogleFonts.interTextTheme(),
+        snackBarTheme: const SnackBarThemeData(
+          backgroundColor: Color(0xFF0F172A),
+          contentTextStyle: TextStyle(color: Colors.white),
+        ),
+        useMaterial3: true,
+      ),
+      darkTheme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF0A0A0A),
+        textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
+        snackBarTheme: const SnackBarThemeData(
+          backgroundColor: Color(0xFF232325),
+          contentTextStyle: TextStyle(color: Colors.white),
+        ),
+        useMaterial3: true,
+      ),
+      themeMode: isDark ? ThemeMode.dark : ThemeMode.light,
+      home: NexAppRoot(poller: poller),
     );
   }
 }

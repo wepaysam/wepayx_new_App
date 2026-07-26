@@ -48,6 +48,9 @@ class WalletProvider extends ChangeNotifier {
   Map<String, dynamic>? feesPayload;
   Map<String, WithdrawalFeeInfo> feesByAssetKey = {};
   PopupNotification? activePopup;
+  AccountStatusInfo? accountStatus;
+  List<AppAnnouncement> announcements = [];
+  bool accountFeaturesLoading = false;
   bool balanceVisible = true;
   bool isDark = true;
   bool loading = false;
@@ -115,6 +118,7 @@ class WalletProvider extends ChangeNotifier {
         Future.wait([
           _refreshPrices(),
           _refreshFees(),
+          refreshAccountFeatures(),
         ]).catchError((_) => <void>[]),
       );
       return user != null;
@@ -194,17 +198,12 @@ class WalletProvider extends ChangeNotifier {
     _applySession(session);
   }
 
-  Future<void> login({
-    required String email,
-    required String password,
-  }) async {
+  Future<void> login({required String email, required String password}) async {
     loading = true;
     error = null;
     notifyListeners();
     try {
-      await _withApiRetry(
-        () => _loginOnce(email: email, password: password),
-      );
+      await _withApiRetry(() => _loginOnce(email: email, password: password));
     } catch (e) {
       error = e.toString();
       rethrow;
@@ -229,8 +228,51 @@ class WalletProvider extends ChangeNotifier {
     user = null;
     wallet = const WalletModel();
     events = [];
+    accountStatus = null;
+    announcements = [];
     await clearLastNotificationId();
     notifyListeners();
+  }
+
+  bool isFeatureBlocked(String feature) {
+    final status = accountStatus;
+    if (status == null) return false;
+    return status.isFrozen || status.blocks(feature);
+  }
+
+  Future<void> refreshAccountFeatures({bool force = false}) async {
+    if (user == null) return;
+    if (accountFeaturesLoading && !force) return;
+    accountFeaturesLoading = true;
+    try {
+      try {
+        accountStatus = await _api.accountStatus();
+      } catch (e) {
+        debugPrint('WalletProvider: account status refresh failed: $e');
+      }
+      try {
+        announcements = await _api.announcements(limit: 3);
+      } catch (e) {
+        debugPrint('WalletProvider: announcements refresh failed: $e');
+      }
+      notifyListeners();
+    } finally {
+      accountFeaturesLoading = false;
+    }
+  }
+
+  Future<SupportTicket> createSupportTicket({
+    required String category,
+    required String subject,
+    required String message,
+    String? blockedAction,
+  }) {
+    return _api.createSupportTicket(
+      category: category,
+      subject: subject,
+      message: message,
+      blockedAction: blockedAction,
+    );
   }
 
   Future<void> changePassword({
@@ -278,7 +320,9 @@ class WalletProvider extends ChangeNotifier {
         await _refreshFearGreed();
         return;
       }
-      debugPrint('WalletProvider: backend prices unusable (source=${snapshot.source}), trying Coinbase');
+      debugPrint(
+        'WalletProvider: backend prices unusable (source=${snapshot.source}), trying Coinbase',
+      );
     } catch (e) {
       debugPrint('WalletProvider: backend price refresh failed: $e');
     }
@@ -322,7 +366,8 @@ class WalletProvider extends ChangeNotifier {
   }
 
   double feeDeductionFor(String symbol, String network) {
-    return feeFor(symbol: symbol, network: network)?.deductionAmount(symbol) ?? 0;
+    return feeFor(symbol: symbol, network: network)?.deductionAmount(symbol) ??
+        0;
   }
 
   double receiverGetsAmount({
@@ -409,11 +454,25 @@ class WalletProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<T> _guardRestrictedAction<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } catch (error) {
+      if (error is ApiException &&
+          (error.statusCode == 423 || error.code == 'ACCOUNT_RESTRICTED')) {
+        await refreshAccountFeatures();
+      }
+      rethrow;
+    }
+  }
+
   Future<DepositAddressResult> depositAddress({
     required String asset,
     required String network,
   }) {
-    return _api.depositAddress(asset: asset, network: network);
+    return _guardRestrictedAction(
+      () => _api.depositAddress(asset: asset, network: network),
+    );
   }
 
   Future<WithdrawalResult> withdraw({
@@ -422,11 +481,13 @@ class WalletProvider extends ChangeNotifier {
     required String amount,
     required String toAddress,
   }) async {
-    final result = await _api.withdrawalRequest(
-      asset: asset,
-      network: network,
-      amount: amount,
-      toAddress: toAddress,
+    final result = await _guardRestrictedAction(
+      () => _api.withdrawalRequest(
+        asset: asset,
+        network: network,
+        amount: amount,
+        toAddress: toAddress,
+      ),
     );
     Future.microtask(refreshWallet);
     return result;
@@ -439,12 +500,14 @@ class WalletProvider extends ChangeNotifier {
     required String toNetwork,
     required String amount,
   }) {
-    return _api.swapEstimate(
-      fromAsset: fromAsset,
-      fromNetwork: fromNetwork,
-      toAsset: toAsset,
-      toNetwork: toNetwork,
-      amount: amount,
+    return _guardRestrictedAction(
+      () => _api.swapEstimate(
+        fromAsset: fromAsset,
+        fromNetwork: fromNetwork,
+        toAsset: toAsset,
+        toNetwork: toNetwork,
+        amount: amount,
+      ),
     );
   }
 
@@ -455,12 +518,14 @@ class WalletProvider extends ChangeNotifier {
     required String toNetwork,
     required String amount,
   }) async {
-    final result = await _api.swapExchange(
-      fromAsset: fromAsset,
-      fromNetwork: fromNetwork,
-      toAsset: toAsset,
-      toNetwork: toNetwork,
-      amount: amount,
+    final result = await _guardRestrictedAction(
+      () => _api.swapExchange(
+        fromAsset: fromAsset,
+        fromNetwork: fromNetwork,
+        toAsset: toAsset,
+        toNetwork: toNetwork,
+        amount: amount,
+      ),
     );
     Future.microtask(refreshWallet);
     return result;
@@ -474,5 +539,6 @@ class WalletProvider extends ChangeNotifier {
     events = session.events;
     SecurityService.instance.unlock();
     Future.microtask(registerPushToken);
+    Future.microtask(refreshAccountFeatures);
   }
 }

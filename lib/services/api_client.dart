@@ -8,10 +8,11 @@ import 'package:path_provider/path_provider.dart';
 import '../config/api_config.dart';
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.code});
 
   final String message;
   final int? statusCode;
+  final String? code;
 
   @override
   String toString() => message;
@@ -111,6 +112,7 @@ class ApiClient {
       return ApiException(
         data['error'].toString(),
         statusCode: error.response?.statusCode,
+        code: data['code']?.toString(),
       );
     }
     if (data is String && data.isNotEmpty) {

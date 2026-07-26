@@ -44,7 +44,9 @@ Future<void> _pollInBackground() async {
   final session = await WalletApi(ApiClient.instance).me();
   if (session.user == null) return;
 
-  final notifications = await WalletApi(ApiClient.instance).popupNotifications();
+  final notifications = await WalletApi(
+    ApiClient.instance,
+  ).popupNotifications();
   if (notifications.isEmpty) return;
 
   final latest = notifications.last;
@@ -88,7 +90,9 @@ class NotificationPoller {
         constraints: Constraints(networkType: NetworkType.connected),
         existingWorkPolicy: ExistingWorkPolicy.keep,
       );
-      debugPrint('NotificationPoller: background task registered (every ~15 min)');
+      debugPrint(
+        'NotificationPoller: background task registered (every ~15 min)',
+      );
     } catch (e) {
       debugPrint('NotificationPoller: background task setup failed: $e');
     }
@@ -99,13 +103,17 @@ class NotificationPoller {
     _running = true;
     unawaited(_pollOnce());
     _foregroundTimer?.cancel();
-    _foregroundTimer = Timer.periodic(const Duration(seconds: 4), (_) => _pollOnce());
+    _foregroundTimer = Timer.periodic(
+      const Duration(seconds: 4),
+      (_) => _pollOnce(),
+    );
   }
 
   Future<void> pollOnResume() async {
     await Future.wait([
       _pollOnce(),
       _provider.refreshPrices(),
+      _provider.refreshAccountFeatures(),
     ]);
   }
 

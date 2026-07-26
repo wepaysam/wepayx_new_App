@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/wallet_provider.dart';
 import '../services/app_update_service.dart';
+import '../services/address_book_service.dart';
 import '../services/local_notification_service.dart';
 import '../services/notification_poller.dart';
 import '../services/push_service.dart';
@@ -44,6 +45,14 @@ class _NexBootstrapHostState extends State<NexBootstrapHost> {
     final updateStatus = await _checkForRequiredUpdate();
     if (!mounted) return;
 
+    debugPrint(
+      'AppUpdate: local=${updateStatus.localLabel} '
+      'remote=${updateStatus.remoteLabel} '
+      'requires=${updateStatus.requiresUpdate} '
+      'block=${updateStatus.mustBlockApp} '
+      'error=${updateStatus.error}',
+    );
+
     if (updateStatus.mustBlockApp) {
       setState(() {
         _forceUpdate = true;
@@ -57,6 +66,11 @@ class _NexBootstrapHostState extends State<NexBootstrapHost> {
     final security = SecurityService.instance;
 
     await _safe('security', security.init, const Duration(seconds: 8));
+    await _safe(
+      'addressBook',
+      AddressBookService.instance.load,
+      const Duration(seconds: 5),
+    );
     await _safe('wallet', wallet.bootstrap, const Duration(seconds: 45));
 
     if (!mounted) return;

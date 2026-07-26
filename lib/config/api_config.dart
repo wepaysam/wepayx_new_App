@@ -53,7 +53,9 @@ class ApiConfig {
 
   static String resolveApkUrl(String? url) {
     final raw = (url ?? '').trim();
-    if (raw.isEmpty) return defaultApkDownloadUrl;
+    // Keep empty empty — never invent an Android APK URL for iOS / no-update
+    // responses from the update server.
+    if (raw.isEmpty) return '';
     if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
     if (raw.startsWith('/')) return _join(apkBaseUrl, raw);
     return _join(apkBaseUrl, '/$raw');

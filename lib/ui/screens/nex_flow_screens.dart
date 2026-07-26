@@ -12,6 +12,7 @@ import '../../core/utils/tx_utils.dart';
 import '../../models/api_models.dart';
 import '../../models/wallet_model.dart';
 import '../../services/deposit_card_service.dart';
+import '../../services/address_book_service.dart';
 import '../../providers/wallet_provider.dart';
 import '../nex_layout.dart';
 import '../nex_tokens.dart';
@@ -20,6 +21,8 @@ import '../widgets/address_qr_scanner_screen.dart';
 import '../widgets/app_lock_screen.dart';
 import '../widgets/nex_components.dart';
 import '../widgets/nex_security_settings.dart';
+import 'nex_account_support_screens.dart';
+import 'nex_address_book_screens.dart';
 import 'nex_settings_screens.dart';
 
 class NexProfileScreen extends StatelessWidget {
@@ -27,17 +30,25 @@ class NexProfileScreen extends StatelessWidget {
     super.key,
     required this.onLogout,
     this.onActivity,
+    this.onSupport,
+    this.onAnnouncements,
+    this.onAddressBook,
   });
 
   final VoidCallback onLogout;
   final VoidCallback? onActivity;
+  final VoidCallback? onSupport;
+  final VoidCallback? onAnnouncements;
+  final VoidCallback? onAddressBook;
 
   @override
   Widget build(BuildContext context) {
     final t = NexThemeScope.of(context);
     final provider = context.watch<WalletProvider>();
     final user = provider.user;
-    final initial = (user?.name ?? user?.email ?? 'W').substring(0, 1).toUpperCase();
+    final initial = (user?.name ?? user?.email ?? 'W')
+        .substring(0, 1)
+        .toUpperCase();
 
     Widget sectionLabel(String title) {
       return Padding(
@@ -108,7 +119,11 @@ class NexProfileScreen extends StatelessWidget {
                       children: [
                         Text(
                           user?.name ?? 'Wallet User',
-                          style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: t.text),
+                          style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.w800,
+                            color: t.text,
+                          ),
                         ),
                         Text(
                           user?.email ?? 'Login required',
@@ -143,8 +158,8 @@ class NexProfileScreen extends StatelessWidget {
                     NexSettingsRow(
                       icon: 'user',
                       label: 'Address Book',
-                      comingSoon: true,
-                      onTap: () => showNexComingSoon(context, 'Address book'),
+                      onTap: onAddressBook ??
+                          () => showNexComingSoon(context, 'Address book'),
                     ),
                   ],
                 ),
@@ -175,7 +190,7 @@ class NexProfileScreen extends StatelessWidget {
                     NexSettingsRow(
                       icon: 'help',
                       label: 'Help & Support',
-                      onTap: () => showNexComingSoon(context, 'Help center'),
+                      onTap: onSupport,
                     ),
                     NexSettingsRow(
                       icon: 'info',
@@ -186,8 +201,7 @@ class NexProfileScreen extends StatelessWidget {
                     NexSettingsRow(
                       icon: 'bell',
                       label: 'Announcements',
-                      comingSoon: true,
-                      onTap: () => showNexComingSoon(context, 'Announcements'),
+                      onTap: onAnnouncements,
                     ),
                   ],
                 ),
@@ -199,7 +213,9 @@ class NexProfileScreen extends StatelessWidget {
                       icon: 'globe',
                       label: 'About Us',
                       onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(builder: (_) => const NexAboutScreen()),
+                        MaterialPageRoute<void>(
+                          builder: (_) => const NexAboutScreen(),
+                        ),
                       ),
                     ),
                   ],
@@ -245,9 +261,32 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      context.read<WalletProvider>().fetchFees();
+      final provider = context.read<WalletProvider>();
+      await provider.refreshAccountFeatures(force: true);
+      if (!mounted) return;
+      if (provider.isFeatureBlocked('deposit')) {
+        final t = NexThemeScope.of(context);
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: t.cardBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: t.cardBorder),
+            ),
+            content: Text(
+              NexAccountRestrictionBanner.detailText(provider.accountStatus),
+              style: TextStyle(color: t.text, height: 1.35),
+            ),
+          ),
+        );
+        widget.onBack();
+        return;
+      }
+      await provider.fetchFees();
     });
   }
 
@@ -258,9 +297,9 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
     });
     try {
       final data = await context.read<WalletProvider>().depositAddress(
-            asset: asset!.symbol,
-            network: n,
-          );
+        asset: asset!.symbol,
+        network: n,
+      );
       setState(() => result = data);
     } catch (e) {
       if (mounted) showNexToast(context, e.toString());
@@ -295,7 +334,11 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
     }
   }
 
-  Future<void> _downloadDepositQr(String addr, String symbol, String net) async {
+  Future<void> _downloadDepositQr(
+    String addr,
+    String symbol,
+    String net,
+  ) async {
     if (addr.isEmpty || _downloading) return;
     setState(() => _downloading = true);
     try {
@@ -351,7 +394,9 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
           backgroundColor: t.cardSoft,
           side: BorderSide(color: t.inputBorder),
           minimumSize: const Size.fromHeight(48),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
         child: child,
       );
@@ -389,7 +434,10 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
     );
   }
 
-  Widget _assetPicker(BuildContext context, ValueChanged<AssetDefinition> onPick) {
+  Widget _assetPicker(
+    BuildContext context,
+    ValueChanged<AssetDefinition> onPick,
+  ) {
     return ColoredBox(
       color: NexThemeScope.of(context).appBg,
       child: Column(
@@ -398,7 +446,9 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
           NexScreenHeader(title: 'Receive', onBack: widget.onBack),
           Expanded(
             child: ListView(
-              padding: EdgeInsets.symmetric(horizontal: NexLayout.horizontalPadding(context)),
+              padding: EdgeInsets.symmetric(
+                horizontal: NexLayout.horizontalPadding(context),
+              ),
               children: kSupportedAssets
                   .where((a) => a.symbol != 'TRX')
                   .map(
@@ -409,18 +459,37 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                         onTap: () => onPick(a),
                         child: Row(
                           children: [
-                            CoinLogo(symbol: a.symbol, color: a.color, size: 40),
+                            CoinLogo(
+                              symbol: a.symbol,
+                              color: a.color,
+                              size: 40,
+                            ),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(a.name, style: TextStyle(fontWeight: FontWeight.w600, color: NexThemeScope.of(context).text)),
-                                  Text(a.symbol, style: TextStyle(color: NexThemeScope.of(context).muted)),
+                                  Text(
+                                    a.name,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: NexThemeScope.of(context).text,
+                                    ),
+                                  ),
+                                  Text(
+                                    a.symbol,
+                                    style: TextStyle(
+                                      color: NexThemeScope.of(context).muted,
+                                    ),
+                                  ),
                                 ],
                               ),
                             ),
-                            NexIcon('chevR', size: 18, color: NexThemeScope.of(context).subtle),
+                            NexIcon(
+                              'chevR',
+                              size: 18,
+                              color: NexThemeScope.of(context).subtle,
+                            ),
                           ],
                         ),
                       ),
@@ -445,7 +514,10 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          NexScreenHeader(title: 'Receive ${asset.symbol}', onBack: () => setState(() => this.asset = null)),
+          NexScreenHeader(
+            title: 'Receive ${asset.symbol}',
+            onBack: () => setState(() => this.asset = null),
+          ),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -464,12 +536,28 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(networkLabel(n), style: const TextStyle(fontWeight: FontWeight.w700)),
-                              if (feeLine.isNotEmpty) Text(feeLine, style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+                              Text(
+                                networkLabel(n),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              if (feeLine.isNotEmpty)
+                                Text(
+                                  feeLine,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF64748B),
+                                  ),
+                                ),
                             ],
                           ),
                         ),
-                        NexIcon('chevR', size: 18, color: NexThemeScope.of(context).subtle),
+                        NexIcon(
+                          'chevR',
+                          size: 18,
+                          color: NexThemeScope.of(context).subtle,
+                        ),
                       ],
                     ),
                   ),
@@ -500,10 +588,10 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
             title: 'Receive ${a.symbol}',
             onBack: () => setState(() => network = null),
           ),
-            Expanded(
-              child: ListView(
-                padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 24),
-                children: [
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 24),
+              children: [
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -515,11 +603,25 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                             children: [
                               const NexLogo(size: 22),
                               const SizedBox(width: 7),
-                              Text('NEX Wallet', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16, color: t.text)),
+                              Text(
+                                'NEX Wallet',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                  color: t.text,
+                                ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 5),
-                          Text('Deposit ${a.symbol}', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: t.text)),
+                          Text(
+                            'Deposit ${a.symbol}',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: t.text,
+                            ),
+                          ),
                           Text(
                             'Scan the QR code or copy the wallet address',
                             style: TextStyle(fontSize: 12, color: t.text2),
@@ -532,7 +634,12 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                 ),
                 const SizedBox(height: 16),
                 if (loading)
-                  Center(child: Padding(padding: const EdgeInsets.all(40), child: CircularProgressIndicator(color: t.navActive)))
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(40),
+                      child: CircularProgressIndicator(color: t.navActive),
+                    ),
+                  )
                 else
                   Container(
                     padding: const EdgeInsets.all(13),
@@ -542,15 +649,31 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                       border: Border.all(color: t.cardBorder),
                       boxShadow: t.dark
                           ? null
-                          : const [BoxShadow(color: Color(0x1F0F172A), blurRadius: 24, offset: Offset(0, 10))],
+                          : const [
+                              BoxShadow(
+                                color: Color(0x1F0F172A),
+                                blurRadius: 24,
+                                offset: Offset(0, 10),
+                              ),
+                            ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Network', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: t.muted)),
+                        Text(
+                          'Network',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: t.muted,
+                          ),
+                        ),
                         const SizedBox(height: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 10,
+                          ),
                           decoration: BoxDecoration(
                             border: Border.all(color: t.inputBorder),
                             borderRadius: BorderRadius.circular(11),
@@ -562,16 +685,31 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                               Expanded(
                                 child: Text(
                                   networkLabel(n),
-                                  style: TextStyle(fontWeight: FontWeight.w700, color: t.text),
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: t.text,
+                                  ),
                                 ),
                               ),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFECFDF5).withValues(alpha: t.dark ? 0.2 : 1),
+                                  color: const Color(
+                                    0xFFECFDF5,
+                                  ).withValues(alpha: t.dark ? 0.2 : 1),
                                   borderRadius: BorderRadius.circular(999),
                                 ),
-                                child: const Text('Active', style: TextStyle(color: Color(0xFF059669), fontSize: 11, fontWeight: FontWeight.w700)),
+                                child: const Text(
+                                  'Active',
+                                  style: TextStyle(
+                                    color: Color(0xFF059669),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
                               ),
                             ],
                           ),
@@ -585,12 +723,23 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                             ),
                             child: Padding(
                               padding: const EdgeInsets.all(8),
-                              child: QrImageView(data: addr, size: qrSize, backgroundColor: Colors.white),
+                              child: QrImageView(
+                                data: addr,
+                                size: qrSize,
+                                backgroundColor: Colors.white,
+                              ),
                             ),
                           ),
                         ),
                         const SizedBox(height: 12),
-                        Text('Deposit address', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.muted)),
+                        Text(
+                          'Deposit address',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: t.muted,
+                          ),
+                        ),
                         const SizedBox(height: 8),
                         Container(
                           decoration: BoxDecoration(
@@ -605,7 +754,11 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                                   child: Text(
                                     addr,
                                     textAlign: TextAlign.center,
-                                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: t.text),
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: t.text,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -618,9 +771,17 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                                   width: 38,
                                   height: 46,
                                   decoration: BoxDecoration(
-                                    border: Border(left: BorderSide(color: t.inputBorder)),
+                                    border: Border(
+                                      left: BorderSide(color: t.inputBorder),
+                                    ),
                                   ),
-                                  child: Center(child: NexIcon('copy', size: 18, color: t.muted)),
+                                  child: Center(
+                                    child: NexIcon(
+                                      'copy',
+                                      size: 18,
+                                      color: t.muted,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],
@@ -637,19 +798,27 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                                 ? SizedBox(
                                     width: 16,
                                     height: 16,
-                                    child: CircularProgressIndicator(strokeWidth: 2, color: t.text),
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: t.text,
+                                    ),
                                   )
                                 : NexIcon('download', size: 16, color: t.text),
                             label: Text(
                               _downloading ? 'Downloading…' : 'Download QR',
-                              style: TextStyle(fontWeight: FontWeight.w800, color: t.text),
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: t.text,
+                              ),
                             ),
                             style: OutlinedButton.styleFrom(
                               backgroundColor: t.cardSoft,
                               foregroundColor: t.text,
                               side: BorderSide(color: t.inputBorder),
                               minimumSize: const Size.fromHeight(44),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(13),
+                              ),
                             ),
                           ),
                         ),
@@ -666,25 +835,56 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                                   child: Padding(
                                     padding: const EdgeInsets.all(10),
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        Text('Network fee', style: TextStyle(fontSize: 11, color: t.muted, fontWeight: FontWeight.w600)),
-                                        Text(feeLabel, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF059669))),
+                                        Text(
+                                          'Network fee',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: t.muted,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        Text(
+                                          feeLabel,
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w800,
+                                            color: Color(0xFF059669),
+                                          ),
+                                        ),
                                       ],
                                     ),
                                   ),
                                 ),
-                                Container(width: 1, height: 48, color: t.inputBorder),
+                                Container(
+                                  width: 1,
+                                  height: 48,
+                                  color: t.inputBorder,
+                                ),
                                 Expanded(
                                   child: Padding(
                                     padding: const EdgeInsets.all(10),
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        Text('Important', style: TextStyle(fontSize: 11, color: t.muted, fontWeight: FontWeight.w600)),
+                                        Text(
+                                          'Important',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: t.muted,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
                                         Text(
                                           'Send only on selected network',
-                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: t.text),
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w800,
+                                            color: t.text,
+                                          ),
                                         ),
                                       ],
                                     ),
@@ -710,10 +910,23 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                               shape: BoxShape.circle,
                               border: Border.all(color: t.inputBorder),
                             ),
-                            child: Center(child: NexIcon(label == 'Fast' ? 'refresh' : 'shield', size: 18, color: t.muted)),
+                            child: Center(
+                              child: NexIcon(
+                                label == 'Fast' ? 'refresh' : 'shield',
+                                size: 18,
+                                color: t.muted,
+                              ),
+                            ),
                           ),
                           const SizedBox(height: 8),
-                          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.text2)),
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: t.text2,
+                            ),
+                          ),
                         ],
                       ),
                     );
@@ -785,14 +998,17 @@ class _NexSendFlowState extends State<NexSendFlow> {
   bool _withdrawalIsFullyComplete(String? status, String? txid) {
     if (txIsPending(status)) return false;
     final value = (status ?? '').toLowerCase();
-    if (['failed', 'refunded', 'withdrawal_failed'].contains(value)) return true;
+    if (['failed', 'refunded', 'withdrawal_failed'].contains(value)) {
+      return true;
+    }
     if (['completed', 'confirmed', 'success', 'sent'].contains(value)) {
       return txid != null && txid.isNotEmpty;
     }
     return false;
   }
 
-  bool _withdrawalInProgress(String? status, String? txid) => !_withdrawalIsFullyComplete(status, txid);
+  bool _withdrawalInProgress(String? status, String? txid) =>
+      !_withdrawalIsFullyComplete(status, txid);
 
   String? _txidFromActivity(WalletProvider provider, int withdrawalId) {
     if (withdrawalId <= 0) return null;
@@ -800,7 +1016,9 @@ class _NexSendFlowState extends State<NexSendFlow> {
     for (final item in provider.wallet.activity) {
       if (item.id == key || item.reference?.contains('$withdrawalId') == true) {
         final tx = item.txid;
-        if (tx != null && tx.isNotEmpty && !tx.startsWith('futre-withdrawal-')) {
+        if (tx != null &&
+            tx.isNotEmpty &&
+            !tx.startsWith('futre-withdrawal-')) {
           return tx;
         }
       }
@@ -811,9 +1029,32 @@ class _NexSendFlowState extends State<NexSendFlow> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      context.read<WalletProvider>().fetchFees();
+      final provider = context.read<WalletProvider>();
+      await provider.refreshAccountFeatures(force: true);
+      if (!mounted) return;
+      if (provider.isFeatureBlocked('withdrawal')) {
+        final t = NexThemeScope.of(context);
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: t.cardBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: t.cardBorder),
+            ),
+            content: Text(
+              NexAccountRestrictionBanner.detailText(provider.accountStatus),
+              style: TextStyle(color: t.text, height: 1.35),
+            ),
+          ),
+        );
+        widget.onBack();
+        return;
+      }
+      await provider.fetchFees();
     });
   }
 
@@ -838,7 +1079,12 @@ class _NexSendFlowState extends State<NexSendFlow> {
   }
 
   Future<void> _pollWithdrawalStatus() async {
-    if (!mounted || step != _SendStep.success || asset == null || network == null) return;
+    if (!mounted ||
+        step != _SendStep.success ||
+        asset == null ||
+        network == null) {
+      return;
+    }
     final provider = context.read<WalletProvider>();
     await provider.refreshWallet();
     if (!mounted) return;
@@ -917,7 +1163,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
   double _balance(WalletProvider provider) {
     if (asset == null) return 0;
     return provider.assetViews
-        .firstWhere((v) => v.definition.id == asset!.id, orElse: () => provider.assetViews.first)
+        .firstWhere(
+          (v) => v.definition.id == asset!.id,
+          orElse: () => provider.assetViews.first,
+        )
         .amount;
   }
 
@@ -973,6 +1222,41 @@ class _NexSendFlowState extends State<NexSendFlow> {
     _applyRecipientAddress(text);
   }
 
+  Future<void> _pickSavedAddress() async {
+    final n = network;
+    if (n == null) return;
+    final selected = await showAddressBookPicker(
+      context,
+      networkFilter: n,
+    );
+    if (!mounted || selected == null) return;
+    setState(() {
+      _address.text = selected.address;
+    });
+  }
+
+  Future<void> _saveCurrentAddress() async {
+    final a = asset;
+    final n = network;
+    if (a == null || n == null) return;
+    final addr = _address.text.trim();
+    if (addr.length < 12) {
+      showNexToast(context, 'Enter a valid address first');
+      return;
+    }
+    if (!looksLikeNetworkAddress(addr, n)) {
+      showNexToast(context, 'Address does not look valid for $n');
+      return;
+    }
+    await showSaveAddressSheet(
+      context,
+      address: addr,
+      network: n,
+      assetHint: a.symbol,
+    );
+    if (mounted) setState(() {});
+  }
+
   Future<void> _scanRecipientAddress() async {
     final n = network;
     if (n == null) return;
@@ -992,7 +1276,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
   double _price(WalletProvider provider) {
     if (asset == null) return 0;
     return provider.assetViews
-        .firstWhere((v) => v.definition.id == asset!.id, orElse: () => provider.assetViews.first)
+        .firstWhere(
+          (v) => v.definition.id == asset!.id,
+          orElse: () => provider.assetViews.first,
+        )
         .price;
   }
 
@@ -1012,7 +1299,8 @@ class _NexSendFlowState extends State<NexSendFlow> {
 
     final authed = await authenticateSensitiveAction(
       context,
-      reason: 'Confirm sending ${Formatters.amount(_amountNum)} ${asset!.symbol}',
+      reason:
+          'Confirm sending ${Formatters.amount(_amountNum)} ${asset!.symbol}',
     );
     if (!authed || !mounted) return;
 
@@ -1026,11 +1314,11 @@ class _NexSendFlowState extends State<NexSendFlow> {
     _startStatusPoll();
     try {
       final data = await context.read<WalletProvider>().withdraw(
-            asset: asset!.symbol,
-            network: network!,
-            amount: _amount.text.trim(),
-            toAddress: _address.text.trim(),
-          );
+        asset: asset!.symbol,
+        network: network!,
+        amount: _amount.text.trim(),
+        toAddress: _address.text.trim(),
+      );
       if (!mounted) return;
       setState(() {
         result = data;
@@ -1047,7 +1335,8 @@ class _NexSendFlowState extends State<NexSendFlow> {
       if (!mounted) return;
 
       final pending = provider.pendingWithdrawal;
-      final timedOut = e.toString().toLowerCase().contains('longer than expected') ||
+      final timedOut =
+          e.toString().toLowerCase().contains('longer than expected') ||
           e.toString().toLowerCase().contains('timeout') ||
           e.toString().contains('0:00:30');
 
@@ -1073,7 +1362,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
         return;
       }
 
-      final message = e.toString().replaceFirst('ApiException: ', '').replaceFirst('Exception: ', '');
+      final message = e
+          .toString()
+          .replaceFirst('ApiException: ', '')
+          .replaceFirst('Exception: ', '');
       _stopStatusPoll();
       setState(() {
         step = _SendStep.review;
@@ -1088,7 +1380,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
   Widget build(BuildContext context) {
     final screen = switch (step) {
       _SendStep.asset => _assetPicker(context, context.watch<WalletProvider>()),
-      _SendStep.network => _networkPicker(context, context.watch<WalletProvider>()),
+      _SendStep.network => _networkPicker(
+        context,
+        context.watch<WalletProvider>(),
+      ),
       _SendStep.form => _sendForm(context, context.watch<WalletProvider>()),
       _SendStep.review => _sendReview(context, context.watch<WalletProvider>()),
       _SendStep.processing => _withdrawalProgress(context),
@@ -1114,7 +1409,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
           NexScreenHeader(title: 'Send', onBack: widget.onBack),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: Text('Choose an asset to send.', style: TextStyle(fontSize: 15, color: t.text2)),
+            child: Text(
+              'Choose an asset to send.',
+              style: TextStyle(fontSize: 15, color: t.text2),
+            ),
           ),
           Expanded(
             child: ListView(
@@ -1129,9 +1427,9 @@ class _NexSendFlowState extends State<NexSendFlow> {
                     onTap: disabled
                         ? null
                         : () => setState(() {
-                              asset = a;
-                              step = _SendStep.network;
-                            }),
+                            asset = a;
+                            step = _SendStep.network;
+                          }),
                     child: Opacity(
                       opacity: disabled ? 0.45 : 1,
                       child: Row(
@@ -1142,10 +1440,20 @@ class _NexSendFlowState extends State<NexSendFlow> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(a.name, style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
+                                Text(
+                                  a.name,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: t.text,
+                                  ),
+                                ),
                                 Text(
                                   '${Formatters.amount(view.amount)} ${a.symbol}${disabled ? ' · Disabled' : ''}',
-                                  style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: t.muted),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                    color: t.muted,
+                                  ),
                                 ),
                               ],
                             ),
@@ -1176,7 +1484,9 @@ class _NexSendFlowState extends State<NexSendFlow> {
           NexScreenHeader(title: 'Select Network', onBack: _back),
           Expanded(
             child: ListView(
-              padding: EdgeInsets.symmetric(horizontal: NexLayout.horizontalPadding(context)),
+              padding: EdgeInsets.symmetric(
+                horizontal: NexLayout.horizontalPadding(context),
+              ),
               children: [
                 Row(
                   children: [
@@ -1186,14 +1496,28 @@ class _NexSendFlowState extends State<NexSendFlow> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(a.name, style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
-                          Text(a.symbol, style: TextStyle(fontSize: 12, color: t.muted)),
+                          Text(
+                            a.name,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: t.text,
+                            ),
+                          ),
+                          Text(
+                            a.symbol,
+                            style: TextStyle(fontSize: 12, color: t.muted),
+                          ),
                         ],
                       ),
                     ),
                     Text(
                       _balanceLabel(provider, totalBalance, a.symbol),
-                      style: TextStyle(fontSize: 13, fontFamily: 'monospace', fontWeight: FontWeight.w600, color: t.text),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.w600,
+                        color: t.text,
+                      ),
                     ),
                   ],
                 ),
@@ -1203,17 +1527,28 @@ class _NexSendFlowState extends State<NexSendFlow> {
                   decoration: BoxDecoration(
                     color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
+                    border: Border.all(
+                      color: const Color(0xFFF59E0B).withValues(alpha: 0.3),
+                    ),
                   ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const NexIcon('alert', size: 18, color: Color(0xFFF59E0B)),
+                      const NexIcon(
+                        'alert',
+                        size: 18,
+                        color: Color(0xFFF59E0B),
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           'Pick the network that matches the recipient. Wrong network can mean lost funds.',
-                          style: TextStyle(fontSize: 13, color: const Color(0xFFF59E0B).withValues(alpha: 0.95)),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: const Color(
+                              0xFFF59E0B,
+                            ).withValues(alpha: 0.95),
+                          ),
                         ),
                       ),
                     ],
@@ -1240,14 +1575,36 @@ class _NexSendFlowState extends State<NexSendFlow> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(n, style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
+                                Text(
+                                  n,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: t.text,
+                                  ),
+                                ),
                                 if (feeLine.isNotEmpty)
-                                  Text(feeLine, style: TextStyle(fontSize: 12, color: t.muted))
+                                  Text(
+                                    feeLine,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: t.muted,
+                                    ),
+                                  )
                                 else if (eta.isNotEmpty)
-                                  Text(eta, style: TextStyle(fontSize: 12, color: t.muted)),
+                                  Text(
+                                    eta,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: t.muted,
+                                    ),
+                                  ),
                                 Text(
                                   _balanceLabel(provider, netBalance, a.symbol),
-                                  style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: t.muted),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                    color: t.muted,
+                                  ),
                                 ),
                               ],
                             ),
@@ -1274,7 +1631,12 @@ class _NexSendFlowState extends State<NexSendFlow> {
     final price = _price(provider);
     final disabled = a.symbol == 'TRX';
     final locked = provider.pendingWithdrawal != null;
-    final valid = !disabled && !locked && _address.text.trim().length > 10 && _amountNum > 0 && _amountNum <= balance;
+    final valid =
+        !disabled &&
+        !locked &&
+        _address.text.trim().length > 10 &&
+        _amountNum > 0 &&
+        _amountNum <= balance;
     final fee = provider.feeDisplayFor(a.symbol, n);
     final eta = kNetworkEta[n] ?? '';
     final balanceLabel = 'Balance on $n';
@@ -1292,21 +1654,57 @@ class _NexSendFlowState extends State<NexSendFlow> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
               children: [
-                if (disabled) _lockBanner(t, 'TRX withdrawal is disabled in futre. Your TRX balance still updates live from your linked NEX wallet.'),
-                if (locked) _lockBanner(t, 'One withdrawal is already processing. You can create another withdrawal after it completes.'),
+                if (disabled)
+                  _lockBanner(
+                    t,
+                    'TRX withdrawal is disabled in futre. Your TRX balance still updates live from your linked NEX wallet.',
+                  ),
+                if (locked)
+                  _lockBanner(
+                    t,
+                    'One withdrawal is already processing. You can create another withdrawal after it completes.',
+                  ),
                 Row(
                   children: [
                     const Expanded(child: NexLabel('Recipient Address')),
                     TextButton(
-                      onPressed: disabled || locked ? null : _pasteRecipientAddress,
+                      onPressed: disabled || locked ? null : _pickSavedAddress,
                       style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Text(
+                        'Book',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: t.navActive,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: disabled || locked
+                          ? null
+                          : _pasteRecipientAddress,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       child: Text(
                         'Paste',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: t.navActive),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: t.navActive,
+                        ),
                       ),
                     ),
                   ],
@@ -1316,13 +1714,23 @@ class _NexSendFlowState extends State<NexSendFlow> {
                   controller: _address,
                   enabled: !disabled && !locked,
                   maxLines: 2,
-                  style: TextStyle(fontSize: 14, fontFamily: 'monospace', color: t.text),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontFamily: 'monospace',
+                    color: t.text,
+                  ),
                   decoration: InputDecoration(
                     hintText: 'Paste or scan $n address',
                     filled: true,
                     fillColor: t.inputFill,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: t.inputBorder)),
-                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: t.inputBorder)),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide(color: t.inputBorder),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide(color: t.inputBorder),
+                    ),
                     suffixIcon: disabled || locked
                         ? null
                         : IconButton(
@@ -1333,6 +1741,48 @@ class _NexSendFlowState extends State<NexSendFlow> {
                   ),
                   onChanged: (_) => setState(() {}),
                 ),
+                if (!disabled &&
+                    !locked &&
+                    _address.text.trim().length > 10) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Builder(
+                      builder: (context) {
+                        final alreadySaved = AddressBookService.instance
+                                .findByAddress(
+                                  _address.text.trim(),
+                                  network: n,
+                                ) !=
+                            null;
+                        return TextButton.icon(
+                          onPressed:
+                              alreadySaved ? null : _saveCurrentAddress,
+                          icon: NexIcon(
+                            alreadySaved ? 'check' : 'plus',
+                            size: 14,
+                            color: alreadySaved ? t.muted : t.navActive,
+                          ),
+                          label: Text(
+                            alreadySaved
+                                ? 'Already saved'
+                                : 'Save to address book',
+                            style: TextStyle(
+                              color: alreadySaved ? t.muted : t.navActive,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 Row(
                   children: [
@@ -1345,7 +1795,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 ),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
                     color: t.inputFill,
                     borderRadius: BorderRadius.circular(16),
@@ -1357,7 +1810,9 @@ class _NexSendFlowState extends State<NexSendFlow> {
                         child: TextField(
                           controller: _amount,
                           enabled: !disabled && !locked,
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
                           style: TextStyle(fontSize: 20, color: t.text),
                           decoration: const InputDecoration(
                             border: InputBorder.none,
@@ -1366,31 +1821,54 @@ class _NexSendFlowState extends State<NexSendFlow> {
                             contentPadding: EdgeInsets.zero,
                           ),
                           onChanged: (v) {
-                            final cleaned = v.replaceAll(RegExp(r'[^0-9.]'), '');
+                            final cleaned = v.replaceAll(
+                              RegExp(r'[^0-9.]'),
+                              '',
+                            );
                             if (cleaned != v) {
                               _amount.value = TextEditingValue(
                                 text: cleaned,
-                                selection: TextSelection.collapsed(offset: cleaned.length),
+                                selection: TextSelection.collapsed(
+                                  offset: cleaned.length,
+                                ),
                               );
                             }
                             setState(() {});
                           },
                         ),
                       ),
-                      Text(a.symbol, style: TextStyle(fontWeight: FontWeight.w600, color: t.text2)),
+                      Text(
+                        a.symbol,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: t.text2,
+                        ),
+                      ),
                       const SizedBox(width: 8),
                       TextButton(
-                        onPressed: disabled || locked ? null : () {
-                          _amount.text = balance.toString();
-                          setState(() {});
-                        },
+                        onPressed: disabled || locked
+                            ? null
+                            : () {
+                                _amount.text = balance.toString();
+                                setState(() {});
+                              },
                         style: TextButton.styleFrom(
                           backgroundColor: t.cardSoft,
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           minimumSize: Size.zero,
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        child: Text('MAX', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.text)),
+                        child: Text(
+                          'MAX',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: t.text,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -1400,7 +1878,9 @@ class _NexSendFlowState extends State<NexSendFlow> {
                   '≈ \$${Formatters.usd(_amountNum * price)}${_amountNum > balance ? '  Insufficient balance' : ''}',
                   style: TextStyle(
                     fontSize: 12,
-                    color: _amountNum > balance ? const Color(0xFFF87171) : t.muted,
+                    color: _amountNum > balance
+                        ? const Color(0xFFF87171)
+                        : t.muted,
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -1421,7 +1901,9 @@ class _NexSendFlowState extends State<NexSendFlow> {
             padding: NexLayout.flowFooterPadding(context),
             child: NexPrimaryButton(
               label: 'Review',
-              onPressed: valid ? () => setState(() => step = _SendStep.review) : null,
+              onPressed: valid
+                  ? () => setState(() => step = _SendStep.review)
+                  : null,
             ),
           ),
         ],
@@ -1456,17 +1938,27 @@ class _NexSendFlowState extends State<NexSendFlow> {
                     decoration: BoxDecoration(
                       color: const Color(0xFFEF4444).withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.35)),
+                      border: Border.all(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.35),
+                      ),
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const NexIcon('alert', size: 18, color: Color(0xFFEF4444)),
+                        const NexIcon(
+                          'alert',
+                          size: 18,
+                          color: Color(0xFFEF4444),
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             submitError!,
-                            style: TextStyle(fontSize: 13, color: t.text, height: 1.35),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: t.text,
+                              height: 1.35,
+                            ),
                           ),
                         ),
                       ],
@@ -1474,16 +1966,25 @@ class _NexSendFlowState extends State<NexSendFlow> {
                   ),
                 ],
                 const SizedBox(height: 8),
-                Center(child: CoinLogo(symbol: a.symbol, color: a.color, size: 56)),
+                Center(
+                  child: CoinLogo(symbol: a.symbol, color: a.color, size: 56),
+                ),
                 const SizedBox(height: 12),
                 Center(
                   child: Text(
                     '${Formatters.amount(amt)} ${a.symbol}',
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: t.text),
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      color: t.text,
+                    ),
                   ),
                 ),
                 Center(
-                  child: Text('≈ \$${Formatters.usd(amt * price)}', style: TextStyle(fontSize: 14, color: t.muted)),
+                  child: Text(
+                    '≈ \$${Formatters.usd(amt * price)}',
+                    style: TextStyle(fontSize: 14, color: t.muted),
+                  ),
                 ),
                 const SizedBox(height: 20),
                 NexCard(
@@ -1494,12 +1995,19 @@ class _NexSendFlowState extends State<NexSendFlow> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('To', style: TextStyle(fontSize: 14, color: t.text2)),
+                          Text(
+                            'To',
+                            style: TextStyle(fontSize: 14, color: t.text2),
+                          ),
                           Flexible(
                             child: Text(
                               Formatters.shortenAddress(addr),
                               textAlign: TextAlign.right,
-                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: t.text),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: t.text,
+                              ),
                             ),
                           ),
                         ],
@@ -1507,15 +2015,37 @@ class _NexSendFlowState extends State<NexSendFlow> {
                       const SizedBox(height: 10),
                       _detailRow(t, 'Network', n),
                       Divider(color: t.divider, height: 24),
-                      _detailRow(t, 'Amount', '${Formatters.amount(amt)} ${a.symbol}', mono: true),
+                      _detailRow(
+                        t,
+                        'Amount',
+                        '${Formatters.amount(amt)} ${a.symbol}',
+                        mono: true,
+                      ),
                       _detailRow(t, 'Network fee', fee),
-                      _detailRow(t, 'Receiver gets', '${Formatters.amount(receiverGets)} ${a.symbol}', mono: true),
+                      _detailRow(
+                        t,
+                        'Receiver gets',
+                        '${Formatters.amount(receiverGets)} ${a.symbol}',
+                        mono: true,
+                      ),
                       Divider(color: t.divider, height: 24),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('Total deducted', style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
-                          Text('${Formatters.amount(amt)} ${a.symbol}', style: TextStyle(fontWeight: FontWeight.w600, color: t.text)),
+                          Text(
+                            'Total deducted',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: t.text,
+                            ),
+                          ),
+                          Text(
+                            '${Formatters.amount(amt)} ${a.symbol}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: t.text,
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -1544,9 +2074,11 @@ class _NexSendFlowState extends State<NexSendFlow> {
     final n = network!;
     final amt = _amountNum;
     final addr = _address.text.trim();
-    final receiverGets = result?.netAmount?.toDouble() ?? _receiverGets(provider, a.symbol);
+    final receiverGets =
+        result?.netAmount?.toDouble() ?? _receiverGets(provider, a.symbol);
     final status = result?.status ?? 'pending_main_wallet';
-    final feeNum = result?.fee?.toDouble() ?? provider.feeDeductionFor(a.symbol, n);
+    final feeNum =
+        result?.fee?.toDouble() ?? provider.feeDeductionFor(a.symbol, n);
     final feeLabel = provider.feeDisplayFor(a.symbol, n);
     final txid = result?.txid;
     final allComplete = _withdrawalIsFullyComplete(status, txid);
@@ -1576,12 +2108,18 @@ class _NexSendFlowState extends State<NexSendFlow> {
               padding: NexLayout.screenPadding(context).copyWith(bottom: 24),
               children: [
                 const SizedBox(height: 8),
-                Center(child: CoinLogo(symbol: a.symbol, color: a.color, size: 64)),
+                Center(
+                  child: CoinLogo(symbol: a.symbol, color: a.color, size: 64),
+                ),
                 const SizedBox(height: 16),
                 Center(
                   child: Text(
                     'Transfer to ${Formatters.shortenAddress(addr)}',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: t.muted),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: t.muted,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -1599,32 +2137,52 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 const SizedBox(height: 16),
                 Center(
                   child: OutlinedButton(
-                    onPressed: () => showNexComingSoon(context, 'Notify recipient'),
+                    onPressed: () =>
+                        showNexComingSoon(context, 'Notify recipient'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: t.text,
                       side: BorderSide(color: t.divider),
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(999),
+                      ),
                     ),
-                    child: const Text('Notify the Other Party', style: TextStyle(fontWeight: FontWeight.w600)),
+                    child: const Text(
+                      'Notify the Other Party',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ),
                 if (!allComplete) ...[
                   const SizedBox(height: 20),
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF22C55E).withValues(alpha: t.dark ? 0.12 : 0.08),
+                      color: const Color(
+                        0xFF22C55E,
+                      ).withValues(alpha: t.dark ? 0.12 : 0.08),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF22C55E).withValues(alpha: 0.35)),
+                      border: Border.all(
+                        color: const Color(0xFF22C55E).withValues(alpha: 0.35),
+                      ),
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Padding(
                           padding: EdgeInsets.only(top: 1),
-                          child: NexIcon('info', size: 18, color: Color(0xFF22C55E)),
+                          child: NexIcon(
+                            'info',
+                            size: 18,
+                            color: Color(0xFF22C55E),
+                          ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -1648,7 +2206,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
                         SizedBox(
                           width: 16,
                           height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: t.text),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: t.text,
+                          ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
@@ -1664,7 +2225,11 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 const SizedBox(height: 24),
                 NexCard(
                   padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-                  child: _withdrawalTimeline(t, activeStep: activeStep, allComplete: allComplete),
+                  child: _withdrawalTimeline(
+                    t,
+                    activeStep: activeStep,
+                    allComplete: allComplete,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 NexCard(
@@ -1724,9 +2289,14 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 style: OutlinedButton.styleFrom(
                   foregroundColor: t.text,
                   side: BorderSide(color: t.divider),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                 ),
-                child: const Text('Done', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                child: const Text(
+                  'Done',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
               ),
             ),
           ),
@@ -1761,7 +2331,12 @@ class _NexSendFlowState extends State<NexSendFlow> {
         final done = allComplete || i < activeStep || i == 0;
         final current = !allComplete && i == activeStep;
         final isLast = i == steps.length - 1;
-        final subtitle = _withdrawalStepSubtitle(label, current: current, activeStep: activeStep, allComplete: allComplete);
+        final subtitle = _withdrawalStepSubtitle(
+          label,
+          current: current,
+          activeStep: activeStep,
+          allComplete: allComplete,
+        );
 
         return IntrinsicHeight(
           child: Row(
@@ -1794,7 +2369,9 @@ class _NexSendFlowState extends State<NexSendFlow> {
                         label,
                         style: TextStyle(
                           fontSize: 15,
-                          fontWeight: current || (done && isLast) ? FontWeight.w700 : FontWeight.w500,
+                          fontWeight: current || (done && isLast)
+                              ? FontWeight.w700
+                              : FontWeight.w500,
                           color: done || current ? t.text : t.muted,
                         ),
                       ),
@@ -1802,7 +2379,11 @@ class _NexSendFlowState extends State<NexSendFlow> {
                         const SizedBox(height: 4),
                         Text(
                           subtitle,
-                          style: TextStyle(fontSize: 12, color: t.muted, height: 1.35),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: t.muted,
+                            height: 1.35,
+                          ),
                         ),
                       ],
                     ],
@@ -1835,13 +2416,22 @@ class _NexSendFlowState extends State<NexSendFlow> {
     return null;
   }
 
-  Widget _withdrawalTimelineDot(NexTokens t, {required bool done, required bool current}) {
+  Widget _withdrawalTimelineDot(
+    NexTokens t, {
+    required bool done,
+    required bool current,
+  }) {
     if (done) {
       return Container(
         width: 22,
         height: 22,
-        decoration: const BoxDecoration(color: Color(0xFF22C55E), shape: BoxShape.circle),
-        child: const Center(child: NexIcon('check', size: 12, color: Colors.white)),
+        decoration: const BoxDecoration(
+          color: Color(0xFF22C55E),
+          shape: BoxShape.circle,
+        ),
+        child: const Center(
+          child: NexIcon('check', size: 12, color: Colors.white),
+        ),
       );
     }
     if (current) {
@@ -1856,7 +2446,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
           child: Container(
             width: 8,
             height: 8,
-            decoration: const BoxDecoration(color: Color(0xFF22C55E), shape: BoxShape.circle),
+            decoration: const BoxDecoration(
+              color: Color(0xFF22C55E),
+              shape: BoxShape.circle,
+            ),
           ),
         ),
       );
@@ -1885,7 +2478,11 @@ class _NexSendFlowState extends State<NexSendFlow> {
             child: Text(
               value,
               textAlign: TextAlign.right,
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: t.text),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: t.text,
+              ),
             ),
           ),
         ],
@@ -1900,7 +2497,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
         children: [
           SizedBox(
             width: 130,
-            child: Text('Network', style: TextStyle(fontSize: 14, color: t.muted)),
+            child: Text(
+              'Network',
+              style: TextStyle(fontSize: 14, color: t.muted),
+            ),
           ),
           Expanded(
             child: Row(
@@ -1912,7 +2512,11 @@ class _NexSendFlowState extends State<NexSendFlow> {
                   child: Text(
                     networkLabel(network),
                     textAlign: TextAlign.right,
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: t.text),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: t.text,
+                    ),
                   ),
                 ),
               ],
@@ -1985,14 +2589,24 @@ class _NexSendFlowState extends State<NexSendFlow> {
           children: [
             const NexIcon('lock', size: 20, color: Color(0xFFF59E0B)),
             const SizedBox(width: 12),
-            Expanded(child: Text(message, style: TextStyle(fontSize: 14, color: t.text2))),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(fontSize: 14, color: t.text2),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _detailRow(NexTokens t, String key, String value, {bool mono = false}) {
+  Widget _detailRow(
+    NexTokens t,
+    String key,
+    String value, {
+    bool mono = false,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -2039,6 +2653,36 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
   String? error;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final provider = context.read<WalletProvider>();
+      await provider.refreshAccountFeatures(force: true);
+      if (!mounted) return;
+      if (provider.isFeatureBlocked('swap')) {
+        final t = NexThemeScope.of(context);
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: t.cardBg,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: t.cardBorder),
+            ),
+            content: Text(
+              NexAccountRestrictionBanner.detailText(provider.accountStatus),
+              style: TextStyle(color: t.text, height: 1.35),
+            ),
+          ),
+        );
+        widget.onBack();
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _amount.dispose();
     super.dispose();
@@ -2047,36 +2691,50 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
   AssetDefinition get _from => assetById(fromId)!;
   AssetDefinition get _to => assetById(toId)!;
 
-  String _fromNetwork() => _from.symbol == 'USDT' ? fromNet : _from.networks.first;
+  String _fromNetwork() =>
+      _from.symbol == 'USDT' ? fromNet : _from.networks.first;
   String _toNetwork() => _to.symbol == 'USDT' ? toNet : _to.networks.first;
 
-  bool get _samePair => _from.symbol == _to.symbol && _fromNetwork() == _toNetwork();
+  bool get _samePair =>
+      _from.symbol == _to.symbol && _fromNetwork() == _toNetwork();
 
   double get _amountNum => double.tryParse(_amount.text.trim()) ?? 0;
 
   double _balance(WalletProvider provider, String id) {
     return provider.assetViews
-        .firstWhere((v) => v.definition.id == id, orElse: () => provider.assetViews.first)
+        .firstWhere(
+          (v) => v.definition.id == id,
+          orElse: () => provider.assetViews.first,
+        )
         .amount;
   }
 
   double _price(WalletProvider provider, String id) {
     return provider.assetViews
-        .firstWhere((v) => v.definition.id == id, orElse: () => provider.assetViews.first)
+        .firstWhere(
+          (v) => v.definition.id == id,
+          orElse: () => provider.assetViews.first,
+        )
         .price;
   }
 
   double? _quotedOutput() {
     final est = quote?.estimate;
     if (est != null) {
-      for (final key in ['amount', 'amountTo', 'estimatedAmount', 'estimatedAmountTo']) {
+      for (final key in [
+        'amount',
+        'amountTo',
+        'estimatedAmount',
+        'estimatedAmountTo',
+      ]) {
         final value = est[key];
         if (value == null) continue;
         final parsed = double.tryParse('$value');
         if (parsed != null && parsed > 0) return parsed;
       }
     }
-    final estAmt = exchange?['estimatedAmount'] ?? exchange?['estimated_amount'];
+    final estAmt =
+        exchange?['estimatedAmount'] ?? exchange?['estimated_amount'];
     if (estAmt != null) {
       final parsed = double.tryParse('$estAmt');
       if (parsed != null && parsed > 0) return parsed;
@@ -2126,17 +2784,20 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
     });
     try {
       final result = await context.read<WalletProvider>().swapEstimate(
-            fromAsset: _from.symbol,
-            fromNetwork: _fromNetwork(),
-            toAsset: _to.symbol,
-            toNetwork: _toNetwork(),
-            amount: _amount.text.trim(),
-          );
+        fromAsset: _from.symbol,
+        fromNetwork: _fromNetwork(),
+        toAsset: _to.symbol,
+        toNetwork: _toNetwork(),
+        amount: _amount.text.trim(),
+      );
       if (!mounted) return;
       setState(() => quote = result);
     } catch (e) {
       if (!mounted) return;
-      final message = e.toString().replaceFirst('ApiException: ', '').replaceFirst('Exception: ', '');
+      final message = e
+          .toString()
+          .replaceFirst('ApiException: ', '')
+          .replaceFirst('Exception: ', '');
       setState(() {
         quote = null;
         error = message;
@@ -2147,13 +2808,16 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
   }
 
   Future<void> _createExchange() async {
-    if (_amountNum <= 0 || _amountNum > _balance(context.read<WalletProvider>(), fromId) || _samePair) {
+    if (_amountNum <= 0 ||
+        _amountNum > _balance(context.read<WalletProvider>(), fromId) ||
+        _samePair) {
       return;
     }
 
     final authed = await authenticateSensitiveAction(
       context,
-      reason: 'Confirm swap of ${Formatters.amount(_amountNum)} ${_from.symbol}',
+      reason:
+          'Confirm swap of ${Formatters.amount(_amountNum)} ${_from.symbol}',
     );
     if (!authed || !mounted) return;
 
@@ -2163,12 +2827,12 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
     });
     try {
       final data = await context.read<WalletProvider>().swapExchange(
-            fromAsset: _from.symbol,
-            fromNetwork: _fromNetwork(),
-            toAsset: _to.symbol,
-            toNetwork: _toNetwork(),
-            amount: _amount.text.trim(),
-          );
+        fromAsset: _from.symbol,
+        fromNetwork: _fromNetwork(),
+        toAsset: _to.symbol,
+        toNetwork: _toNetwork(),
+        amount: _amount.text.trim(),
+      );
       if (!mounted) return;
       final row = data['exchange'];
       setState(() {
@@ -2178,7 +2842,10 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
       showNexToast(context, 'Swap exchange created');
     } catch (e) {
       if (!mounted) return;
-      final message = e.toString().replaceFirst('ApiException: ', '').replaceFirst('Exception: ', '');
+      final message = e
+          .toString()
+          .replaceFirst('ApiException: ', '')
+          .replaceFirst('Exception: ', '');
       setState(() => error = message);
       showNexError(context, message);
     } finally {
@@ -2255,8 +2922,15 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                           Expanded(
                             child: TextField(
                               controller: _amount,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              style: TextStyle(fontSize: 26, fontFamily: 'monospace', color: t.text),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              style: TextStyle(
+                                fontSize: 26,
+                                fontFamily: 'monospace',
+                                color: t.text,
+                              ),
                               decoration: const InputDecoration(
                                 border: InputBorder.none,
                                 hintText: '0.00',
@@ -2268,16 +2942,28 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                           ),
                           GestureDetector(
                             onTap: () {
-                              setState(() => _amount.text = Formatters.amount(fromBal));
+                              setState(
+                                () => _amount.text = Formatters.amount(fromBal),
+                              );
                               _resetQuote();
                             },
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
                               decoration: BoxDecoration(
                                 color: t.cardSoft,
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Text('MAX', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.text)),
+                              child: Text(
+                                'MAX',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: t.text,
+                                ),
+                              ),
                             ),
                           ),
                         ],
@@ -2285,7 +2971,11 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                       const SizedBox(height: 6),
                       Text(
                         'Balance ${Formatters.amount(fromBal)} ${_from.symbol}',
-                        style: TextStyle(fontSize: 12, color: t.muted, fontFamily: 'monospace'),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: t.muted,
+                          fontFamily: 'monospace',
+                        ),
                       ),
                     ],
                   ),
@@ -2306,7 +2996,11 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                           shape: BoxShape.circle,
                           border: Border.all(color: t.appBg, width: 4),
                         ),
-                        child: NexIcon('refresh', size: 18, color: t.secondaryText),
+                        child: NexIcon(
+                          'refresh',
+                          size: 18,
+                          color: t.secondaryText,
+                        ),
                       ),
                     ),
                   ),
@@ -2347,12 +3041,22 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                 if (error != null) ...[
                   const SizedBox(height: 12),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFF7F1D1D).withValues(alpha: 0.85),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Text(error!, style: const TextStyle(color: Color(0xFFF87171), fontSize: 12, fontWeight: FontWeight.w600)),
+                    child: Text(
+                      error!,
+                      style: const TextStyle(
+                        color: Color(0xFFF87171),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ],
                 const SizedBox(height: 12),
@@ -2372,7 +3076,9 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                       _swapRow(
                         t,
                         'Receive',
-                        _amountNum > 0 ? '${Formatters.amount(out)} ${_to.symbol}' : '0.00',
+                        _amountNum > 0
+                            ? '${Formatters.amount(out)} ${_to.symbol}'
+                            : '0.00',
                         mono: true,
                       ),
                     ],
@@ -2387,13 +3093,20 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
               children: [
                 NexSecondaryButton(
                   label: loading ? 'Checking...' : 'Get live quote',
-                  onPressed: (!_amountNum.isFinite || _amountNum <= 0 || _samePair || loading) ? () {} : _loadQuote,
+                  onPressed:
+                      (!_amountNum.isFinite ||
+                          _amountNum <= 0 ||
+                          _samePair ||
+                          loading)
+                      ? () {}
+                      : _loadQuote,
                 ),
                 const SizedBox(height: 8),
                 NexPrimaryButton(
                   label: 'Create exchange',
                   loading: loading,
-                  onPressed: (!_amountNum.isFinite ||
+                  onPressed:
+                      (!_amountNum.isFinite ||
                           _amountNum <= 0 ||
                           _amountNum > fromBal ||
                           _samePair ||
@@ -2413,7 +3126,8 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
     final t = NexThemeScope.of(context);
     final provider = context.watch<WalletProvider>();
     final out = _outputAmount(provider);
-    final addressFrom = exchange?['addressFrom'] ??
+    final addressFrom =
+        exchange?['addressFrom'] ??
         exchange?['address_from'] ??
         exchange?['depositAddress'] ??
         exchange?['payinAddress'];
@@ -2441,8 +3155,17 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                       child: Container(
                         width: 56,
                         height: 56,
-                        decoration: const BoxDecoration(color: Color(0xFFFBBF24), shape: BoxShape.circle),
-                        child: const Center(child: NexIcon('refresh', size: 28, color: Colors.white)),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFFBBF24),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Center(
+                          child: NexIcon(
+                            'refresh',
+                            size: 28,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -2451,7 +3174,11 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                 Text(
                   'Exchange created',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: t.text),
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: t.text,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -2476,7 +3203,12 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                       const SizedBox(height: 8),
                       Text(
                         '${Formatters.amount(_amountNum)} ${_from.symbol}',
-                        style: TextStyle(fontSize: 22, fontFamily: 'monospace', fontWeight: FontWeight.w600, color: t.text),
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w600,
+                          color: t.text,
+                        ),
                       ),
                       const SizedBox(height: 16),
                       NexLabel('To SimpleSwap address', color: t.muted),
@@ -2489,13 +3221,23 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
-                          addressFrom?.toString() ?? 'Waiting for provider deposit address',
-                          style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: t.text),
+                          addressFrom?.toString() ??
+                              'Waiting for provider deposit address',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontFamily: 'monospace',
+                            color: t.text,
+                          ),
                         ),
                       ),
                       if (extraId != null) ...[
                         const SizedBox(height: 12),
-                        _swapRow(t, 'Payment ID / memo', '$extraId', mono: true),
+                        _swapRow(
+                          t,
+                          'Payment ID / memo',
+                          '$extraId',
+                          mono: true,
+                        ),
                       ],
                       const SizedBox(height: 12),
                       NexSecondaryButton(
@@ -2503,7 +3245,9 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                         onPressed: addressFrom == null
                             ? () {}
                             : () {
-                                Clipboard.setData(ClipboardData(text: '$addressFrom'));
+                                Clipboard.setData(
+                                  ClipboardData(text: '$addressFrom'),
+                                );
                                 showNexToast(context, 'Deposit address copied');
                               },
                       ),
@@ -2548,7 +3292,10 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
             return GestureDetector(
               onTap: () => onAsset(asset.id),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: active ? t.pillActiveBg : t.pillIdleBg,
                   borderRadius: BorderRadius.circular(999),
@@ -2556,7 +3303,11 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CoinLogo(symbol: asset.symbol, color: asset.color, size: 18),
+                    CoinLogo(
+                      symbol: asset.symbol,
+                      color: asset.color,
+                      size: 18,
+                    ),
                     const SizedBox(width: 6),
                     Text(
                       asset.symbol,
@@ -2582,7 +3333,10 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
               return GestureDetector(
                 onTap: () => onNetwork(network),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: active ? t.pillActiveBg : t.pillIdleBg,
                     borderRadius: BorderRadius.circular(8),
