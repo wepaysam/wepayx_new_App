@@ -1,6 +1,7 @@
 import '../models/api_models.dart';
 import '../models/user_model.dart';
 import '../models/wallet_model.dart';
+import '../config/otp_bypass.dart';
 import 'api_client.dart';
 
 class WalletApi {
@@ -44,15 +45,155 @@ class WalletApi {
     return AuthSession.fromJson(data);
   }
 
-  Future<AuthSession> login({
+  /// Sends a one-time code to the signup email.
+  /// Live response example:
+  /// `{ "ok": true, "email": "...", "expiresAt": "...", "emailVerified": false }`
+  Future<Map<String, dynamic>> requestSignupEmailVerification({
+    required String email,
+  }) async {
+    try {
+      final data = await _client.post(
+        '/api/signup/email-verification/request',
+        body: {'email': email},
+      );
+      if (data['ok'] == false) {
+        throw Exception(
+          data['error']?.toString() ?? 'Could not send verification code',
+        );
+      }
+      return data;
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) {
+        throw Exception(
+          'Email verification is not available on the server yet. Ask backend to deploy POST /api/signup/email-verification/request',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// Confirms the email OTP from signup verification.
+  Future<UserModel?> confirmSignupEmailVerification({
+    required String email,
+    required String otp,
+  }) async {
+    try {
+      final data = await _client.post(
+        '/api/signup/email-verification/confirm',
+        body: {'email': email, 'otp': otp},
+      );
+      if (data['ok'] == false) {
+        throw Exception(
+          data['error']?.toString() ?? 'Invalid or expired verification code',
+        );
+      }
+      final userJson = data['user'];
+      if (userJson is Map<String, dynamic>) {
+        return UserModel.fromJson(userJson);
+      }
+      // Some responses may only return emailVerified flags without a user object.
+      if (data['emailVerified'] == true) {
+        return null;
+      }
+      return null;
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) {
+        throw Exception(
+          'Email verification is not available on the server yet. Ask backend to deploy POST /api/signup/email-verification/confirm',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// Verifies credentials and sends a login OTP. Session is created only after
+  /// [confirmLoginEmailVerification].
+  Future<Map<String, dynamic>> requestLoginOtp({
+    required String email,
+    required String password,
+  }) async {
+    final bypass = OtpBypass.isExempt(email);
+    final data = await _client.post(
+      '/api/login',
+      body: {
+        'email': email,
+        'password': password,
+        if (bypass) 'skipOtp': true,
+      },
+    );
+    if (data['user'] != null) {
+      return {...data, 'loginOtpRequired': data['loginOtpRequired'] == true};
+    }
+    if (data['loginOtpRequired'] == true || data['ok'] == true) {
+      return data;
+    }
+    throw Exception(data['error']?.toString() ?? 'Login failed');
+  }
+
+  Future<AuthSession> confirmLoginEmailVerification({
+    required String email,
+    required String otp,
+  }) async {
+    final data = await _client.post(
+      '/api/login/email-verification/confirm',
+      body: {'email': email, 'otp': otp},
+    );
+    if (data['user'] == null) {
+      throw Exception(data['error']?.toString() ?? 'Invalid or expired code');
+    }
+    return AuthSession.fromJson(data);
+  }
+
+  Future<void> requestForgotPassword({required String email}) async {
+    final data = await _client.post(
+      '/api/forgot-password/request',
+      body: {'email': email},
+    );
+    if (data['ok'] != true) {
+      throw Exception(data['error']?.toString() ?? 'Could not send reset code');
+    }
+  }
+
+  Future<void> confirmForgotPassword({
+    required String email,
+    required String otp,
+    required String newPassword,
+  }) async {
+    final data = await _client.post(
+      '/api/forgot-password/confirm',
+      body: {'email': email, 'otp': otp, 'newPassword': newPassword},
+    );
+    if (data['ok'] != true) {
+      throw Exception(data['error']?.toString() ?? 'Password reset failed');
+    }
+  }
+
+  Future<String?> requestAccountDelete({
     required String email,
     required String password,
   }) async {
     final data = await _client.post(
-      '/api/login',
+      '/api/account/delete/request',
       body: {'email': email, 'password': password},
     );
-    return AuthSession.fromJson(data);
+    if (data['ok'] != true) {
+      throw Exception(data['error']?.toString() ?? 'Could not send delete code');
+    }
+    return data['email']?.toString();
+  }
+
+  Future<void> confirmAccountDelete({
+    required String email,
+    required String password,
+    required String otp,
+  }) async {
+    final data = await _client.post(
+      '/api/account/delete/confirm',
+      body: {'email': email, 'password': password, 'otp': otp},
+    );
+    if (data['ok'] != true) {
+      throw Exception(data['error']?.toString() ?? 'Account deletion failed');
+    }
   }
 
   Future<void> logout() async {
@@ -256,7 +397,7 @@ class WalletApi {
         'toAsset': toAsset,
         'toNetwork': toNetwork,
         'amount': amount,
-        if (addressTo != null) 'addressTo': addressTo,
+        'addressTo': ?addressTo,
         'fixed': fixed,
         'reverse': reverse,
       },
@@ -269,7 +410,7 @@ class WalletApi {
   }) async {
     final data = await _client.post(
       '/api/action',
-      body: {'action': action, if (detail != null) 'detail': detail},
+      body: {'action': action, 'detail': ?detail},
     );
     return (data['events'] as List<dynamic>? ?? [])
         .whereType<Map<String, dynamic>>()

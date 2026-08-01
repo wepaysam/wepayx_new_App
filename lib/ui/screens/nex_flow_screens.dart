@@ -33,6 +33,7 @@ class NexProfileScreen extends StatelessWidget {
     this.onSupport,
     this.onAnnouncements,
     this.onAddressBook,
+    this.onDeleteAccount,
   });
 
   final VoidCallback onLogout;
@@ -40,6 +41,7 @@ class NexProfileScreen extends StatelessWidget {
   final VoidCallback? onSupport;
   final VoidCallback? onAnnouncements;
   final VoidCallback? onAddressBook;
+  final VoidCallback? onDeleteAccount;
 
   @override
   Widget build(BuildContext context) {
@@ -230,6 +232,13 @@ class NexProfileScreen extends StatelessWidget {
                       danger: true,
                       onTap: onLogout,
                     ),
+                    NexSettingsRow(
+                      icon: 'alert',
+                      label: 'Delete account',
+                      danger: true,
+                      onTap: onDeleteAccount ??
+                          () => showNexComingSoon(context, 'Delete account'),
+                    ),
                   ],
                 ),
               ],
@@ -322,10 +331,12 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
     if (addr.isEmpty || _sharing) return;
     setState(() => _sharing = true);
     try {
+      final isDark = context.read<WalletProvider>().isDark;
       await DepositCardService.instance.share(
         address: addr,
         symbol: symbol,
         network: net,
+        isDark: isDark,
       );
     } catch (e) {
       if (mounted) showNexToast(context, 'Share failed: $e');
@@ -342,10 +353,12 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
     if (addr.isEmpty || _downloading) return;
     setState(() => _downloading = true);
     try {
+      final isDark = context.read<WalletProvider>().isDark;
       await DepositCardService.instance.download(
         address: addr,
         symbol: symbol,
         network: net,
+        isDark: isDark,
       );
       if (mounted) showNexToast(context, 'QR saved to gallery');
     } catch (e) {
@@ -572,10 +585,8 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
 
   Widget _depositQr(BuildContext context) {
     final t = NexThemeScope.of(context);
-    final provider = context.watch<WalletProvider>();
     final a = asset!;
     final n = network!;
-    final feeLabel = provider.feeDisplayFor(a.symbol, n);
     final addr = result?.depositAddress ?? '';
     final hPad = NexLayout.horizontalPadding(context);
     final qrSize = NexLayout.qrSize(context);
@@ -715,115 +726,60 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        Center(
-                          child: DecoratedBox(
+                        if (addr.isEmpty) ...[
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
+                              color: t.cardSoft,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: t.cardBorder),
                             ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(8),
-                              child: QrImageView(
-                                data: addr,
-                                size: qrSize,
-                                backgroundColor: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Deposit address',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: t.muted,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: t.inputBorder),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(10),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                NexIcon('lock', size: 16, color: t.navActive),
+                                const SizedBox(width: 10),
+                                Expanded(
                                   child: Text(
-                                    addr,
-                                    textAlign: TextAlign.center,
+                                    'Please login again to fetch your deposit address.',
                                     style: TextStyle(
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.w700,
-                                      color: t.text,
+                                      color: t.text2,
+                                      fontSize: 12,
+                                      height: 1.4,
                                     ),
                                   ),
                                 ),
+                              ],
+                            ),
+                          ),
+                        ] else ...[
+                          Center(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                              InkWell(
-                                onTap: () {
-                                  Clipboard.setData(ClipboardData(text: addr));
-                                  showNexToast(context, 'Address copied');
-                                },
-                                child: Container(
-                                  width: 38,
-                                  height: 46,
-                                  decoration: BoxDecoration(
-                                    border: Border(
-                                      left: BorderSide(color: t.inputBorder),
-                                    ),
-                                  ),
-                                  child: Center(
-                                    child: NexIcon(
-                                      'copy',
-                                      size: 18,
-                                      color: t.muted,
-                                    ),
-                                  ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: QrImageView(
+                                  data: addr,
+                                  size: qrSize,
+                                  backgroundColor: Colors.white,
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: addr.isEmpty || _downloading
-                                ? null
-                                : () => _downloadDepositQr(addr, a.symbol, n),
-                            icon: _downloading
-                                ? SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: t.text,
-                                    ),
-                                  )
-                                : NexIcon('download', size: 16, color: t.text),
-                            label: Text(
-                              _downloading ? 'Downloading…' : 'Download QR',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                color: t.text,
-                              ),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              backgroundColor: t.cardSoft,
-                              foregroundColor: t.text,
-                              side: BorderSide(color: t.inputBorder),
-                              minimumSize: const Size.fromHeight(44),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(13),
-                              ),
                             ),
                           ),
-                        ),
-                        if (feeLabel != '—') ...[
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Deposit address',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: t.muted,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
                           Container(
                             decoration: BoxDecoration(
                               border: Border.all(color: t.inputBorder),
@@ -834,66 +790,114 @@ class _NexReceiveFlowState extends State<NexReceiveFlow> {
                                 Expanded(
                                   child: Padding(
                                     padding: const EdgeInsets.all(10),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Network fee',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: t.muted,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        Text(
-                                          feeLabel,
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w800,
-                                            color: Color(0xFF059669),
-                                          ),
-                                        ),
-                                      ],
+                                    child: Text(
+                                      addr,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: t.text,
+                                      ),
                                     ),
                                   ),
                                 ),
-                                Container(
-                                  width: 1,
-                                  height: 48,
-                                  color: t.inputBorder,
-                                ),
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(10),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Important',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            color: t.muted,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        Text(
-                                          'Send only on selected network',
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w800,
-                                            color: t.text,
-                                          ),
-                                        ),
-                                      ],
+                                InkWell(
+                                  onTap: () {
+                                    Clipboard.setData(
+                                        ClipboardData(text: addr));
+                                    showNexToast(context, 'Address copied');
+                                  },
+                                  child: Container(
+                                    width: 38,
+                                    height: 46,
+                                    decoration: BoxDecoration(
+                                      border: Border(
+                                        left: BorderSide(color: t.inputBorder),
+                                      ),
+                                    ),
+                                    child: Center(
+                                      child: NexIcon(
+                                        'copy',
+                                        size: 18,
+                                        color: t.muted,
+                                      ),
                                     ),
                                   ),
                                 ),
                               ],
                             ),
                           ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _downloading
+                                  ? null
+                                  : () => _downloadDepositQr(addr, a.symbol, n),
+                              icon: _downloading
+                                  ? SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: t.text,
+                                      ),
+                                    )
+                                  : NexIcon('download', size: 16, color: t.text),
+                              label: Text(
+                                _downloading ? 'Downloading…' : 'Download QR',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  color: t.text,
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                backgroundColor: t.cardSoft,
+                                foregroundColor: t.text,
+                                side: BorderSide(color: t.inputBorder),
+                                minimumSize: const Size.fromHeight(44),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(13),
+                                ),
+                              ),
+                            ),
+                          ),
                         ],
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: t.inputBorder),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            children: [
+                              Text(
+                                'Important',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: t.muted,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Send only on selected network',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: t.text,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -1284,15 +1288,26 @@ class _NexSendFlowState extends State<NexSendFlow> {
   }
 
   double _receiverGets(WalletProvider provider, String symbol) {
-    if (network == null) return _amountNum;
+    final crypto = _cryptoAmount(provider);
+    if (network == null) return crypto;
     return provider.receiverGetsAmount(
       symbol: symbol,
       network: network!,
-      amount: _amountNum,
+      amount: crypto,
     );
   }
 
-  double get _amountNum => double.tryParse(_amount.text.trim()) ?? 0;
+  double get _usdAmountNum => Formatters.parseDecimal(_amount.text);
+
+  double _cryptoAmount(WalletProvider provider) {
+    final price = _price(provider);
+    if (price <= 0 || _usdAmountNum <= 0) return 0;
+    return _usdAmountNum / price;
+  }
+
+  String _cryptoAmountForApi(WalletProvider provider) {
+    return Formatters.apiAmount(_cryptoAmount(provider));
+  }
 
   Future<void> _submit() async {
     if (asset == null || network == null || submitting) return;
@@ -1300,7 +1315,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
     final authed = await authenticateSensitiveAction(
       context,
       reason:
-          'Confirm sending ${Formatters.amount(_amountNum)} ${asset!.symbol}',
+          'Confirm sending \$${Formatters.usd(_usdAmountNum)} (${Formatters.amount(_cryptoAmount(context.read<WalletProvider>()))} ${asset!.symbol})',
     );
     if (!authed || !mounted) return;
 
@@ -1316,7 +1331,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
       final data = await context.read<WalletProvider>().withdraw(
         asset: asset!.symbol,
         network: network!,
-        amount: _amount.text.trim(),
+        amount: _cryptoAmountForApi(context.read<WalletProvider>()),
         toAddress: _address.text.trim(),
       );
       if (!mounted) return;
@@ -1629,14 +1644,15 @@ class _NexSendFlowState extends State<NexSendFlow> {
     final n = network!;
     final balance = _networkBalance(provider);
     final price = _price(provider);
+    final cryptoAmount = _cryptoAmount(provider);
     final disabled = a.symbol == 'TRX';
     final locked = provider.pendingWithdrawal != null;
     final valid =
         !disabled &&
         !locked &&
         _address.text.trim().length > 10 &&
-        _amountNum > 0 &&
-        _amountNum <= balance;
+        cryptoAmount > 0 &&
+        cryptoAmount <= balance;
     final fee = provider.feeDisplayFor(a.symbol, n);
     final eta = kNetworkEta[n] ?? '';
     final balanceLabel = 'Balance on $n';
@@ -1788,7 +1804,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
                   children: [
                     const Expanded(child: NexLabel('Amount')),
                     Text(
-                      '$balanceLabel ${Formatters.amount(balance)} ${a.symbol}',
+                      '$balanceLabel \$${provider.balanceVisible ? Formatters.usd(balance * price) : '••••'}',
                       style: TextStyle(fontSize: 12, color: t.muted),
                     ),
                   ],
@@ -1838,7 +1854,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
                         ),
                       ),
                       Text(
-                        a.symbol,
+                        'USD',
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           color: t.text2,
@@ -1849,7 +1865,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
                         onPressed: disabled || locked
                             ? null
                             : () {
-                                _amount.text = balance.toString();
+                                _amount.text = (balance * price).toStringAsFixed(2);
                                 setState(() {});
                               },
                         style: TextButton.styleFrom(
@@ -1875,10 +1891,10 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '≈ \$${Formatters.usd(_amountNum * price)}${_amountNum > balance ? '  Insufficient balance' : ''}',
+                  '≈ ${Formatters.amount(cryptoAmount)} ${a.symbol}${cryptoAmount > balance ? '  Insufficient balance' : ''}',
                   style: TextStyle(
                     fontSize: 12,
-                    color: _amountNum > balance
+                    color: cryptoAmount > balance
                         ? const Color(0xFFF87171)
                         : t.muted,
                   ),
@@ -1916,8 +1932,8 @@ class _NexSendFlowState extends State<NexSendFlow> {
     final a = asset!;
     final n = network!;
     final addr = _address.text.trim();
-    final amt = _amountNum;
-    final price = _price(provider);
+    final cryptoAmt = _cryptoAmount(provider);
+    final usdAmt = _usdAmountNum;
     final receiverGets = _receiverGets(provider, a.symbol);
     final fee = provider.feeDisplayFor(a.symbol, n);
 
@@ -1972,7 +1988,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 const SizedBox(height: 12),
                 Center(
                   child: Text(
-                    '${Formatters.amount(amt)} ${a.symbol}',
+                    '\$${Formatters.usd(usdAmt)}',
                     style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.w800,
@@ -1982,7 +1998,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 ),
                 Center(
                   child: Text(
-                    '≈ \$${Formatters.usd(amt * price)}',
+                    '≈ ${Formatters.amount(cryptoAmt)} ${a.symbol}',
                     style: TextStyle(fontSize: 14, color: t.muted),
                   ),
                 ),
@@ -2018,7 +2034,13 @@ class _NexSendFlowState extends State<NexSendFlow> {
                       _detailRow(
                         t,
                         'Amount',
-                        '${Formatters.amount(amt)} ${a.symbol}',
+                        '\$${Formatters.usd(usdAmt)}',
+                        mono: true,
+                      ),
+                      _detailRow(
+                        t,
+                        'In ${a.symbol}',
+                        Formatters.amount(cryptoAmt),
                         mono: true,
                       ),
                       _detailRow(t, 'Network fee', fee),
@@ -2040,7 +2062,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
                             ),
                           ),
                           Text(
-                            '${Formatters.amount(amt)} ${a.symbol}',
+                            '\$${Formatters.usd(usdAmt)}',
                             style: TextStyle(
                               fontWeight: FontWeight.w600,
                               color: t.text,
@@ -2072,7 +2094,11 @@ class _NexSendFlowState extends State<NexSendFlow> {
     final t = NexThemeScope.of(context);
     final a = asset!;
     final n = network!;
-    final amt = _amountNum;
+    final cryptoAmt = double.tryParse(result?.amount ?? '') ??
+        _cryptoAmount(provider);
+    final usdAmt = _usdAmountNum > 0
+        ? _usdAmountNum
+        : cryptoAmt * _price(provider);
     final addr = _address.text.trim();
     final receiverGets =
         result?.netAmount?.toDouble() ?? _receiverGets(provider, a.symbol);
@@ -2125,13 +2151,19 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 const SizedBox(height: 10),
                 Center(
                   child: Text(
-                    '- ${Formatters.amount(amt)} ${a.symbol}',
+                    '- \$${Formatters.usd(usdAmt)}',
                     style: TextStyle(
                       fontSize: 34,
                       fontWeight: FontWeight.w800,
                       color: t.text,
                       letterSpacing: -0.5,
                     ),
+                  ),
+                ),
+                Center(
+                  child: Text(
+                    '≈ ${Formatters.amount(cryptoAmt)} ${a.symbol}',
+                    style: TextStyle(fontSize: 14, color: t.muted),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -2698,7 +2730,17 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
   bool get _samePair =>
       _from.symbol == _to.symbol && _fromNetwork() == _toNetwork();
 
-  double get _amountNum => double.tryParse(_amount.text.trim()) ?? 0;
+  double get _usdAmountNum => Formatters.parseDecimal(_amount.text);
+
+  double _fromCryptoAmount(WalletProvider provider) {
+    final price = _price(provider, fromId);
+    if (price <= 0 || _usdAmountNum <= 0) return 0;
+    return _usdAmountNum / price;
+  }
+
+  String _fromCryptoAmountForApi(WalletProvider provider) {
+    return Formatters.apiAmount(_fromCryptoAmount(provider));
+  }
 
   double _balance(WalletProvider provider, String id) {
     return provider.assetViews
@@ -2745,10 +2787,11 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
   double _outputAmount(WalletProvider provider) {
     final quoted = _quotedOutput();
     if (quoted != null) return quoted;
+    final fromCrypto = _fromCryptoAmount(provider);
     final fromPrice = _price(provider, fromId);
     final toPrice = _price(provider, toId);
-    if (_amountNum <= 0 || toPrice <= 0) return 0;
-    return _amountNum * (fromPrice / toPrice) * 0.997;
+    if (fromCrypto <= 0 || toPrice <= 0) return 0;
+    return fromCrypto * (fromPrice / toPrice) * 0.997;
   }
 
   void _clearQuoteFields() {
@@ -2777,18 +2820,21 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
   }
 
   Future<void> _loadQuote() async {
-    if (_amountNum <= 0 || _samePair) return;
+    if (_fromCryptoAmount(context.read<WalletProvider>()) <= 0 || _samePair) {
+      return;
+    }
     setState(() {
       loading = true;
       error = null;
     });
     try {
-      final result = await context.read<WalletProvider>().swapEstimate(
+      final provider = context.read<WalletProvider>();
+      final result = await provider.swapEstimate(
         fromAsset: _from.symbol,
         fromNetwork: _fromNetwork(),
         toAsset: _to.symbol,
         toNetwork: _toNetwork(),
-        amount: _amount.text.trim(),
+        amount: _fromCryptoAmountForApi(provider),
       );
       if (!mounted) return;
       setState(() => quote = result);
@@ -2808,16 +2854,17 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
   }
 
   Future<void> _createExchange() async {
-    if (_amountNum <= 0 ||
-        _amountNum > _balance(context.read<WalletProvider>(), fromId) ||
-        _samePair) {
+    final provider = context.read<WalletProvider>();
+    final fromCrypto = _fromCryptoAmount(provider);
+    final fromBal = _balance(provider, fromId);
+    if (fromCrypto <= 0 || fromCrypto > fromBal || _samePair) {
       return;
     }
 
     final authed = await authenticateSensitiveAction(
       context,
       reason:
-          'Confirm swap of ${Formatters.amount(_amountNum)} ${_from.symbol}',
+          'Confirm swap of \$${Formatters.usd(_usdAmountNum)} (${Formatters.amount(fromCrypto)} ${_from.symbol})',
     );
     if (!authed || !mounted) return;
 
@@ -2826,12 +2873,12 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
       error = null;
     });
     try {
-      final data = await context.read<WalletProvider>().swapExchange(
+      final data = await provider.swapExchange(
         fromAsset: _from.symbol,
         fromNetwork: _fromNetwork(),
         toAsset: _to.symbol,
         toNetwork: _toNetwork(),
-        amount: _amount.text.trim(),
+        amount: _fromCryptoAmountForApi(provider),
       );
       if (!mounted) return;
       final row = data['exchange'];
@@ -2885,7 +2932,9 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
     final provider = context.watch<WalletProvider>();
     final out = _outputAmount(provider);
     final fromBal = _balance(provider, fromId);
+    final fromPrice = _price(provider, fromId);
     final toPrice = _price(provider, toId);
+    final fromCrypto = _fromCryptoAmount(provider);
 
     return ColoredBox(
       color: t.appBg,
@@ -2940,10 +2989,19 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                               onChanged: (_) => _resetQuote(),
                             ),
                           ),
+                          Text(
+                            'USD',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: t.text2,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
                           GestureDetector(
                             onTap: () {
                               setState(
-                                () => _amount.text = Formatters.amount(fromBal),
+                                () => _amount.text =
+                                    (fromBal * fromPrice).toStringAsFixed(2),
                               );
                               _resetQuote();
                             },
@@ -2970,13 +3028,24 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Balance ${Formatters.amount(fromBal)} ${_from.symbol}',
+                        'Balance \$${Formatters.usd(fromBal * fromPrice)}',
                         style: TextStyle(
                           fontSize: 12,
                           color: t.muted,
                           fontFamily: 'monospace',
                         ),
                       ),
+                      if (_usdAmountNum > 0) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          '≈ ${Formatters.amount(fromCrypto)} ${_from.symbol}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: t.muted,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -3028,13 +3097,26 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        _amountNum > 0 ? Formatters.amount(out) : '0.00',
+                        _usdAmountNum > 0
+                            ? '\$${Formatters.usd(out * toPrice)}'
+                            : '\$0.00',
                         style: TextStyle(
                           fontSize: 26,
                           fontFamily: 'monospace',
-                          color: _amountNum > 0 ? t.text : t.subtle,
+                          color: _usdAmountNum > 0 ? t.text : t.subtle,
                         ),
                       ),
+                      if (_usdAmountNum > 0) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          '≈ ${Formatters.amount(out)} ${_to.symbol}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: t.muted,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -3076,11 +3158,18 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                       _swapRow(
                         t,
                         'Receive',
-                        _amountNum > 0
-                            ? '${Formatters.amount(out)} ${_to.symbol}'
-                            : '0.00',
+                        _usdAmountNum > 0
+                            ? '\$${Formatters.usd(out * toPrice)}'
+                            : '\$0.00',
                         mono: true,
                       ),
+                      if (_usdAmountNum > 0)
+                        _swapRow(
+                          t,
+                          'In ${_to.symbol}',
+                          Formatters.amount(out),
+                          mono: true,
+                        ),
                     ],
                   ),
                 ),
@@ -3094,8 +3183,8 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                 NexSecondaryButton(
                   label: loading ? 'Checking...' : 'Get live quote',
                   onPressed:
-                      (!_amountNum.isFinite ||
-                          _amountNum <= 0 ||
+                      (!_usdAmountNum.isFinite ||
+                          _usdAmountNum <= 0 ||
                           _samePair ||
                           loading)
                       ? () {}
@@ -3106,9 +3195,9 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                   label: 'Create exchange',
                   loading: loading,
                   onPressed:
-                      (!_amountNum.isFinite ||
-                          _amountNum <= 0 ||
-                          _amountNum > fromBal ||
+                      (!_usdAmountNum.isFinite ||
+                          _usdAmountNum <= 0 ||
+                          fromCrypto > fromBal ||
                           _samePair ||
                           loading)
                       ? null
@@ -3126,6 +3215,8 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
     final t = NexThemeScope.of(context);
     final provider = context.watch<WalletProvider>();
     final out = _outputAmount(provider);
+    final fromCrypto = _fromCryptoAmount(provider);
+    final toPrice = _price(provider, toId);
     final addressFrom =
         exchange?['addressFrom'] ??
         exchange?['address_from'] ??
@@ -3182,9 +3273,15 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '${Formatters.amount(_amountNum)} ${_from.symbol} → ${Formatters.amount(out)} ${_to.symbol}',
+                  '\$${Formatters.usd(_usdAmountNum)} → \$${Formatters.usd(out * toPrice)}',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: t.text2, fontFamily: 'monospace'),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${Formatters.amount(fromCrypto)} ${_from.symbol} → ${Formatters.amount(out)} ${_to.symbol}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: t.muted, fontSize: 12),
                 ),
                 if (publicId != null) ...[
                   const SizedBox(height: 16),
@@ -3202,13 +3299,18 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
                       NexLabel('Send exactly', color: t.muted),
                       const SizedBox(height: 8),
                       Text(
-                        '${Formatters.amount(_amountNum)} ${_from.symbol}',
+                        '${Formatters.amount(fromCrypto)} ${_from.symbol}',
                         style: TextStyle(
                           fontSize: 22,
                           fontFamily: 'monospace',
                           fontWeight: FontWeight.w600,
                           color: t.text,
                         ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '\$${Formatters.usd(_usdAmountNum)}',
+                        style: TextStyle(fontSize: 13, color: t.muted),
                       ),
                       const SizedBox(height: 16),
                       NexLabel('To SimpleSwap address', color: t.muted),

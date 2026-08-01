@@ -5,6 +5,20 @@ class Formatters {
 
   static String usd(num value) => _usd.format(value);
 
+  static double parseDecimal(String text) {
+    return double.tryParse(text.replaceAll(',', '').trim()) ?? 0;
+  }
+
+  static String apiAmount(num value) {
+    if (value <= 0) return '0';
+    var text = value.toStringAsFixed(8);
+    text = text.replaceAll(RegExp(r'0+$'), '');
+    if (text.endsWith('.')) {
+      text = text.substring(0, text.length - 1);
+    }
+    return text.isEmpty ? '0' : text;
+  }
+
   static String amount(num value) {
     if (value == 0) return '0';
     if (value < 1) {

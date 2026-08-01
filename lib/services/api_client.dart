@@ -68,6 +68,29 @@ class ApiClient {
     _dio?.options.baseUrl = ApiConfig.baseUrl;
   }
 
+  /// Clears persisted session cookies (stale / invalid login tokens).
+  Future<void> clearCookies() async {
+    await init();
+    await _cookieJar?.deleteAll();
+  }
+
+  /// True when the API rejected the request because there is no valid session.
+  static bool isSessionExpiredError(Object error) {
+    if (error is ApiException) {
+      final message = error.message.toLowerCase();
+      if (error.statusCode == 401 &&
+          (message.contains('login required') ||
+              message.contains('session') ||
+              message.contains('unauthorized') ||
+              message.contains('not authenticated'))) {
+        return true;
+      }
+      if (message.contains('login required')) return true;
+    }
+    final text = error.toString().toLowerCase();
+    return text.contains('login required');
+  }
+
   Future<Map<String, dynamic>> get(
     String path, {
     Map<String, dynamic>? queryParameters,
@@ -109,9 +132,17 @@ class ApiClient {
   ApiException _mapError(DioException error) {
     final data = error.response?.data;
     if (data is Map && data['error'] != null) {
+      final message = data['error'].toString();
+      final status = error.response?.statusCode;
+      // Prefer backend session errors over a generic API-key message.
+      if (status == 401 ||
+          message.toLowerCase().contains('login required') ||
+          message.toLowerCase().contains('unauthorized')) {
+        return ApiException(message, statusCode: status, code: data['code']?.toString());
+      }
       return ApiException(
-        data['error'].toString(),
-        statusCode: error.response?.statusCode,
+        message,
+        statusCode: status,
         code: data['code']?.toString(),
       );
     }
@@ -119,7 +150,14 @@ class ApiClient {
       return ApiException(data, statusCode: error.response?.statusCode);
     }
 
-    if (error.response?.statusCode == 401 || error.response?.statusCode == 403) {
+    if (error.response?.statusCode == 401) {
+      return ApiException(
+        'Login required',
+        statusCode: 401,
+      );
+    }
+
+    if (error.response?.statusCode == 403) {
       return ApiException(
         'API key missing or invalid. Add your Futre API key in Profile.',
         statusCode: error.response?.statusCode,

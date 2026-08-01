@@ -119,7 +119,7 @@ class _NexSignupScreenState extends State<NexSignupScreen> {
             name: _name.text.trim(),
           );
       if (mounted) {
-        showNexToast(context, 'Account created');
+        showNexToast(context, 'Account created — verify your email');
         widget.onSuccess();
       }
     } catch (e) {
@@ -194,10 +194,16 @@ class _NexSignupScreenState extends State<NexSignupScreen> {
 }
 
 class NexLoginScreen extends StatefulWidget {
-  const NexLoginScreen({super.key, required this.onBack, required this.onSuccess});
+  const NexLoginScreen({
+    super.key,
+    required this.onBack,
+    required this.onSuccess,
+    this.onForgotPassword,
+  });
 
   final VoidCallback onBack;
   final VoidCallback onSuccess;
+  final VoidCallback? onForgotPassword;
 
   @override
   State<NexLoginScreen> createState() => _NexLoginScreenState();
@@ -219,11 +225,15 @@ class _NexLoginScreenState extends State<NexLoginScreen> {
   Future<void> _submit() async {
     setState(() => _loading = true);
     try {
-      await context.read<WalletProvider>().login(
+      await context.read<WalletProvider>().requestLoginOtp(
             email: _email.text.trim(),
             password: _password.text,
           );
-      if (mounted) {
+      if (!mounted) return;
+      final provider = context.read<WalletProvider>();
+      if (provider.pendingLoginEmail != null) {
+        widget.onSuccess();
+      } else {
         showNexToast(context, 'Logged in');
         widget.onSuccess();
       }
@@ -272,7 +282,22 @@ class _NexLoginScreenState extends State<NexLoginScreen> {
                 const SizedBox(height: 8),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('Forgot password?', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: t.text2)),
+                  child: TextButton(
+                    onPressed: widget.onForgotPassword,
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(
+                      'Forgot password?',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: t.text2,
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),

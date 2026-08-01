@@ -62,7 +62,7 @@ class _LoginScreenState extends State<LoginScreen> {
         );
         if (mounted) showAppSnackBar(context, 'Account created');
       } else {
-        await provider.login(
+        await provider.requestLoginOtp(
           email: _email.text.trim(),
           password: _password.text,
         );

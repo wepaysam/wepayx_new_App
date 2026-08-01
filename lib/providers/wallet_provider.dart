@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/api_config.dart';
+import '../config/otp_bypass.dart';
 import '../core/constants/assets.dart';
 import '../models/api_models.dart';
 import '../models/user_model.dart';
@@ -56,6 +57,34 @@ class WalletProvider extends ChangeNotifier {
   bool loading = false;
   bool initialized = false;
   String? error;
+
+  /// Set after signup until the email OTP is confirmed.
+  bool pendingEmailVerification = false;
+  final Set<int> _locallyVerifiedUserIds = {};
+
+  /// Login OTP challenge — cleared after successful confirm or logout.
+  String? pendingLoginEmail;
+  String? _pendingLoginPassword;
+
+  /// True when the signed-in user still needs the email OTP step.
+  bool get needsEmailVerification {
+    final current = user;
+    if (current == null) return false;
+    if (OtpBypass.isExempt(current.email)) return false;
+    if (isEmailVerified) return false;
+    if (pendingEmailVerification) return true;
+    // Backend explicitly marked unverified.
+    return current.emailVerified == false;
+  }
+
+  bool get isEmailVerified {
+    final current = user;
+    if (current == null) return false;
+    if (OtpBypass.isExempt(current.email)) return true;
+    if (current.emailVerified == true) return true;
+    if (_locallyVerifiedUserIds.contains(current.id)) return true;
+    return false;
+  }
 
   List<AssetBalanceView> get assetViews {
     final totals = <String, double>{};
@@ -113,6 +142,16 @@ class WalletProvider extends ChangeNotifier {
       user = session.user;
       wallet = session.wallet;
       events = session.events;
+      if (user != null) {
+        await _restoreLocalEmailVerification(user!.id);
+        if (OtpBypass.isExempt(user!.email)) {
+          pendingEmailVerification = false;
+          user = user!.copyWith(emailVerified: true);
+        } else if (user!.emailVerified == false) {
+          // If backend says unverified, keep forcing the OTP step.
+          pendingEmailVerification = true;
+        }
+      }
       notifyListeners();
       unawaited(
         Future.wait([
@@ -124,6 +163,17 @@ class WalletProvider extends ChangeNotifier {
       return user != null;
     } catch (e) {
       error = e.toString();
+      // If the cookie token is stale/invalid, clear it so we don't keep
+      // trying to use a guest session (Receive/Deposit may otherwise show
+      // blank QR/address).
+      await ApiClient.instance.clearCookies();
+      user = null;
+      wallet = const WalletModel();
+      events = [];
+      accountStatus = null;
+      announcements = [];
+      pendingEmailVerification = false;
+      _clearPendingLogin();
       return false;
     }
   }
@@ -196,14 +246,73 @@ class WalletProvider extends ChangeNotifier {
       name: name,
     );
     _applySession(session);
+    pendingEmailVerification = !OtpBypass.isExempt(email);
+    // New signups are unverified until OTP confirm succeeds (unless exempt).
+    if (user != null && user!.emailVerified != true && !OtpBypass.isExempt(email)) {
+      user = user!.copyWith(emailVerified: false);
+    } else if (user != null && OtpBypass.isExempt(email)) {
+      user = user!.copyWith(emailVerified: true);
+    }
   }
 
-  Future<void> login({required String email, required String password}) async {
+  Future<void> requestSignupEmailVerification() async {
+    final email = user?.email;
+    if (email == null || email.isEmpty) {
+      throw Exception('No email available for verification');
+    }
+    await _withApiRetry(
+      () => _api.requestSignupEmailVerification(email: email),
+    );
+  }
+
+  Future<void> confirmSignupEmailVerification(String otp) async {
+    final email = user?.email;
+    if (email == null || email.isEmpty) {
+      throw Exception('No email available for verification');
+    }
+    final code = otp.trim();
+    if (code.length < 4) {
+      throw Exception('Enter the verification code from your email');
+    }
+
+    final updated = await _withApiRetry(
+      () => _api.confirmSignupEmailVerification(email: email, otp: code),
+    );
+
+    if (updated != null) {
+      user = updated.copyWith(emailVerified: updated.emailVerified ?? true);
+    } else if (user != null) {
+      user = user!.copyWith(emailVerified: true);
+    }
+
+    pendingEmailVerification = false;
+    final id = user?.id;
+    if (id != null) {
+      _locallyVerifiedUserIds.add(id);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('email_verified_$id', true);
+    }
+    notifyListeners();
+  }
+
+  Future<void> _restoreLocalEmailVerification(int userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('email_verified_$userId') == true) {
+      _locallyVerifiedUserIds.add(userId);
+    }
+  }
+
+  Future<void> requestLoginOtp({
+    required String email,
+    required String password,
+  }) async {
     loading = true;
     error = null;
     notifyListeners();
     try {
-      await _withApiRetry(() => _loginOnce(email: email, password: password));
+      await _withApiRetry(
+        () => _requestLoginOtpOnce(email: email, password: password),
+      );
     } catch (e) {
       error = e.toString();
       rethrow;
@@ -213,12 +322,161 @@ class WalletProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _loginOnce({
+  Future<void> _requestLoginOtpOnce({
     required String email,
     required String password,
   }) async {
-    final session = await _api.login(email: email, password: password);
-    _applySession(session);
+    final data = await _api.requestLoginOtp(email: email, password: password);
+
+    // Prefer an immediate session when the server returns one.
+    if (data['user'] != null) {
+      _applySession(AuthSession.fromJson(data));
+      await _afterAuthSessionApplied();
+      _clearPendingLogin();
+      return;
+    }
+
+    final otpRequired = data['loginOtpRequired'] == true;
+    if (otpRequired && OtpBypass.isExempt(email)) {
+      // Exempt test accounts: try magic OTP confirm (local/dev). If production
+      // rejects it, fall through to the normal OTP screen.
+      try {
+        final session = await _api.confirmLoginEmailVerification(
+          email: email.trim(),
+          otp: OtpBypass.magicLoginOtp,
+        );
+        _applySession(session);
+        await _afterAuthSessionApplied();
+        _clearPendingLogin();
+        return;
+      } catch (_) {
+        // Keep going to OTP challenge below.
+      }
+    }
+
+    if (otpRequired || data['ok'] == true) {
+      pendingLoginEmail = email.trim();
+      _pendingLoginPassword = password;
+      return;
+    }
+
+    throw Exception(data['error']?.toString() ?? 'Login failed');
+  }
+
+  Future<void> resendLoginOtp() async {
+    final email = pendingLoginEmail;
+    final password = _pendingLoginPassword;
+    if (email == null || password == null) {
+      throw Exception('Start login again to request a new code');
+    }
+    await _withApiRetry(
+      () => _api.requestLoginOtp(email: email, password: password),
+    );
+  }
+
+  Future<void> confirmLoginOtp(String otp) async {
+    final email = pendingLoginEmail;
+    if (email == null || email.isEmpty) {
+      throw Exception('Start login again to verify your code');
+    }
+    final code = otp.trim();
+    if (code.length < 4) {
+      throw Exception('Enter the verification code from your email');
+    }
+
+    loading = true;
+    error = null;
+    notifyListeners();
+    try {
+      final session = await _withApiRetry(
+        () => _api.confirmLoginEmailVerification(email: email, otp: code),
+      );
+      _applySession(session);
+      await _afterAuthSessionApplied();
+      _clearPendingLogin();
+    } catch (e) {
+      error = e.toString();
+      rethrow;
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _afterAuthSessionApplied() async {
+    if (user != null) {
+      await _restoreLocalEmailVerification(user!.id);
+      if (OtpBypass.isExempt(user!.email)) {
+        pendingEmailVerification = false;
+        user = user!.copyWith(emailVerified: true);
+        return;
+      }
+      if (user!.emailVerified == false && !isEmailVerified) {
+        pendingEmailVerification = true;
+      }
+    }
+  }
+
+  void _clearPendingLogin() {
+    pendingLoginEmail = null;
+    _pendingLoginPassword = null;
+  }
+
+  Future<void> requestForgotPassword(String email) async {
+    await _withApiRetry(() => _api.requestForgotPassword(email: email.trim()));
+  }
+
+  Future<void> confirmForgotPassword({
+    required String email,
+    required String otp,
+    required String newPassword,
+  }) async {
+    await _withApiRetry(
+      () => _api.confirmForgotPassword(
+        email: email.trim(),
+        otp: otp.trim(),
+        newPassword: newPassword,
+      ),
+    );
+  }
+
+  Future<String?> requestAccountDelete({required String password}) async {
+    final email = user?.email;
+    if (email == null || email.isEmpty) {
+      throw Exception('No account email available');
+    }
+    return _withApiRetry(
+      () => _api.requestAccountDelete(email: email, password: password),
+    );
+  }
+
+  Future<void> confirmAccountDelete({
+    required String password,
+    required String otp,
+  }) async {
+    final email = user?.email;
+    if (email == null || email.isEmpty) {
+      throw Exception('No account email available');
+    }
+    await _withApiRetry(
+      () => _api.confirmAccountDelete(
+        email: email,
+        password: password,
+        otp: otp.trim(),
+      ),
+    );
+    try {
+      await _api.logout();
+    } catch (_) {}
+    user = null;
+    wallet = const WalletModel();
+    events = [];
+    accountStatus = null;
+    announcements = [];
+    pendingEmailVerification = false;
+    _clearPendingLogin();
+    await clearLastNotificationId();
+    notifyListeners();
   }
 
   Future<void> logout() async {
@@ -230,11 +488,21 @@ class WalletProvider extends ChangeNotifier {
     events = [];
     accountStatus = null;
     announcements = [];
+    pendingEmailVerification = false;
+    _clearPendingLogin();
     await clearLastNotificationId();
     notifyListeners();
   }
 
   bool isFeatureBlocked(String feature) {
+    if (needsEmailVerification) {
+      // Trusted wallet actions stay locked until email OTP is confirmed.
+      if (feature == 'deposit' ||
+          feature == 'withdrawal' ||
+          feature == 'swap') {
+        return true;
+      }
+    }
     final status = accountStatus;
     if (status == null) return false;
     return status.isFrozen || status.blocks(feature);
@@ -458,12 +726,27 @@ class WalletProvider extends ChangeNotifier {
     try {
       return await action();
     } catch (error) {
+      if (error is ApiException && ApiClient.isSessionExpiredError(error)) {
+        await _handleSessionExpired();
+      }
       if (error is ApiException &&
           (error.statusCode == 423 || error.code == 'ACCOUNT_RESTRICTED')) {
         await refreshAccountFeatures();
       }
       rethrow;
     }
+  }
+
+  Future<void> _handleSessionExpired() async {
+    await ApiClient.instance.clearCookies();
+    user = null;
+    wallet = const WalletModel();
+    events = [];
+    accountStatus = null;
+    announcements = [];
+    pendingEmailVerification = false;
+    _clearPendingLogin();
+    notifyListeners();
   }
 
   Future<DepositAddressResult> depositAddress({

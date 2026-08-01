@@ -13,7 +13,11 @@ import 'nex_layout.dart';
 import 'screens/nex_auth_screens.dart';
 import 'screens/nex_account_support_screens.dart';
 import 'screens/nex_address_book_screens.dart';
+import 'screens/nex_delete_account_screen.dart';
+import 'screens/nex_email_verification_screen.dart';
+import 'screens/nex_forgot_password_screens.dart';
 import 'screens/nex_flow_screens.dart';
+import 'screens/nex_login_otp_screen.dart';
 import 'screens/nex_tab_screens.dart';
 import 'widgets/nex_brand.dart';
 import 'widgets/nex_components.dart';
@@ -75,6 +79,44 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
         : NexTokens.lightTheme();
     final messenger = ScaffoldMessenger.maybeOf(context);
 
+    // If we don't have a valid session, force the user to login.
+    if (provider.user == null) {
+      final host = messenger ?? ScaffoldMessenger.maybeOf(context);
+      host?.clearSnackBars();
+      host?.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: tokens.cardBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: tokens.cardBorder),
+          ),
+          content: Text(
+            'Login required to continue.',
+            style: TextStyle(color: tokens.text, height: 1.35),
+          ),
+          action: SnackBarAction(
+            label: 'Log in',
+            textColor: tokens.navActive,
+            onPressed: () => navigate('login'),
+          ),
+        ),
+      );
+      navigate('login');
+      return;
+    }
+
+    if (provider.needsEmailVerification) {
+      _showNotAllowedNotice(
+        provider,
+        feature,
+        tokens: tokens,
+        messenger: messenger,
+      );
+      navigate('verify-email');
+      return;
+    }
+
     await provider.refreshAccountFeatures(force: true);
     if (!mounted) return;
 
@@ -97,7 +139,9 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
     ScaffoldMessengerState? messenger,
   }) {
     final status = provider.accountStatus;
-    final detail = NexAccountRestrictionBanner.detailText(status);
+    final detail = provider.needsEmailVerification
+        ? 'Verify your email with the OTP we sent before using Send, Receive, or Swap.'
+        : NexAccountRestrictionBanner.detailText(status);
 
     final host = messenger ?? ScaffoldMessenger.maybeOf(context);
     if (host == null) return;
@@ -115,7 +159,13 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
           detail,
           style: TextStyle(color: tokens.text, height: 1.35),
         ),
-        action: status?.supportRequired == true
+        action: provider.needsEmailVerification
+            ? SnackBarAction(
+                label: 'Verify',
+                textColor: tokens.navActive,
+                onPressed: () => navigate('verify-email'),
+              )
+            : status?.supportRequired == true
             ? SnackBarAction(
                 label: 'Support',
                 textColor: tokens.navActive,
@@ -135,13 +185,20 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
   bool _canExitApp(WalletProvider provider) {
     if (stack.length > 1) return false;
     final screen = current.screen;
-    if (screen == 'pin-setup') return false;
+    if (screen == 'pin-setup' ||
+        screen == 'verify-email' ||
+        screen == 'login-otp') {
+      return false;
+    }
     if (screen == 'home' || screen == 'landing') return true;
     return false;
   }
 
   void _handleSystemBack(WalletProvider provider) {
     if (current.screen == 'pin-setup') return;
+    if (current.screen == 'verify-email' || current.screen == 'login-otp') {
+      return;
+    }
     if (stack.length > 1) {
       goBack();
       return;
@@ -175,6 +232,14 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
     setTab('home');
   }
 
+  void _goVerifyEmailOrHome() {
+    setState(() => stack = [const NexRoute('verify-email')]);
+  }
+
+  void _afterEmailVerified() {
+    _goHomeOrPinSetup();
+  }
+
   void replace(String screen, [Map<String, dynamic> params = const {}]) {
     setState(
       () => stack = [
@@ -205,13 +270,31 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
 
     if (provider.user != null && stack.first.screen == 'landing') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _goHomeOrPinSetup();
+        if (!mounted) return;
+        if (provider.needsEmailVerification) {
+          _goVerifyEmailOrHome();
+        } else {
+          _goHomeOrPinSetup();
+        }
       });
     }
 
     if (provider.user != null &&
+        provider.needsEmailVerification &&
+        current.screen != 'verify-email' &&
+        current.screen != 'login' &&
+        current.screen != 'signup' &&
+        current.screen != 'landing') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _goVerifyEmailOrHome();
+      });
+    }
+
+    if (provider.user != null &&
+        !provider.needsEmailVerification &&
         !SecurityService.instance.hasPin &&
         current.screen != 'pin-setup' &&
+        current.screen != 'verify-email' &&
         current.screen != 'login' &&
         current.screen != 'signup' &&
         current.screen != 'landing') {
@@ -225,7 +308,25 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
         : NexTokens.lightTheme();
     const tabs = {'home', 'markets', 'wallet-tab', 'activity', 'profile'};
     final showNav = tabs.contains(current.screen);
-    final authScreens = {'landing', 'login', 'signup', 'pin-setup'};
+    final authScreens = {
+      'landing',
+      'login',
+      'login-otp',
+      'signup',
+      'verify-email',
+      'forgot-password',
+      'forgot-password-reset',
+      'pin-setup',
+    };
+
+    // If session disappears mid-app (stale/invalid cookies), force user back
+    // to login so Receive/Deposit never renders as a guest with blank QR.
+    if (provider.user == null && !authScreens.contains(current.screen)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() => stack = [const NexRoute('login')]);
+      });
+    }
     AppAnnouncement? pinnedAnnouncement;
     if (provider.user != null &&
         !authScreens.contains(current.screen) &&
@@ -299,9 +400,65 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
           onLogin: () => navigate('login'),
         );
       case 'signup':
-        return NexSignupScreen(onBack: goBack, onSuccess: _goHomeOrPinSetup);
+        return NexSignupScreen(onBack: goBack, onSuccess: _goVerifyEmailOrHome);
       case 'login':
-        return NexLoginScreen(onBack: goBack, onSuccess: _goHomeOrPinSetup);
+        return NexLoginScreen(
+          onBack: goBack,
+          onForgotPassword: () => navigate('forgot-password'),
+          onSuccess: () {
+            final p = context.read<WalletProvider>();
+            if (p.pendingLoginEmail != null) {
+              navigate('login-otp');
+              return;
+            }
+            if (p.needsEmailVerification) {
+              _goVerifyEmailOrHome();
+            } else {
+              _goHomeOrPinSetup();
+            }
+          },
+        );
+      case 'login-otp':
+        return NexLoginOtpScreen(
+          onBack: goBack,
+          onVerified: () {
+            final p = context.read<WalletProvider>();
+            if (p.needsEmailVerification) {
+              _goVerifyEmailOrHome();
+            } else {
+              _goHomeOrPinSetup();
+            }
+          },
+        );
+      case 'forgot-password':
+        return NexForgotPasswordScreen(
+          onBack: goBack,
+          onCodeSent: (email) => navigate('forgot-password-reset', {'email': email}),
+        );
+      case 'forgot-password-reset':
+        return NexForgotPasswordResetScreen(
+          email: current.params['email'] as String? ?? '',
+          onBack: goBack,
+          onSuccess: () => setState(() => stack = [const NexRoute('login')]),
+        );
+      case 'delete-account':
+        return NexDeleteAccountScreen(
+          onBack: goBack,
+          onDeleted: () async {
+            await provider.logout();
+            if (mounted) setState(() => stack = [const NexRoute('landing')]);
+          },
+        );
+      case 'verify-email':
+        return NexEmailVerificationScreen(
+          onVerified: _afterEmailVerified,
+          onBack: provider.user == null
+              ? goBack
+              : () async {
+                  await provider.logout();
+                  if (mounted) setState(() => stack = [const NexRoute('landing')]);
+                },
+        );
       case 'pin-setup':
         return NexPinSetupScreen(onComplete: () => setTab('home'));
       case 'home':
@@ -343,6 +500,7 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
           onSupport: () => navigate('support'),
           onAnnouncements: () => navigate('announcements'),
           onAddressBook: () => navigate('address-book'),
+          onDeleteAccount: () => navigate('delete-account'),
         );
       case 'receive-asset':
       case 'receive-network':

@@ -43,6 +43,16 @@ class NexLogo extends StatelessWidget {
   }
 }
 
+/// Paints the NEX shield-and-N mark inside [box]. Shared by [NexLogo] and by
+/// offscreen canvases such as the downloadable deposit card.
+void paintNexLogoMark(Canvas canvas, Rect box, {double strokeWidth = 2.4}) {
+  canvas.save();
+  canvas.translate(box.left, box.top);
+  canvas.scale(box.width / 48);
+  _paintNexLogo(canvas, strokeWidth);
+  canvas.restore();
+}
+
 class _NexLogoPainter extends CustomPainter {
   _NexLogoPainter({required this.strokeWidth});
 
@@ -52,51 +62,51 @@ class _NexLogoPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final scale = size.width / 48;
     canvas.scale(scale);
-
-    final gradient = LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: const [Color(0xFF5CC8FF), Color(0xFF2B8CFF), Color(0xFF0F4FE0)],
-      stops: const [0, 0.55, 1],
-    );
-    final rect = Rect.fromLTWH(0, 0, 48, 48);
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..shader = gradient.createShader(rect)
-      ..strokeJoin = StrokeJoin.round
-      ..strokeCap = StrokeCap.round;
-
-    final shield = Path()
-      ..moveTo(24, 3.5)
-      ..lineTo(41, 11.3)
-      ..lineTo(41, 25.2)
-      ..cubicTo(41, 35, 33.4, 41.8, 24, 44.8)
-      ..cubicTo(14.6, 41.8, 7, 35, 7, 25.2)
-      ..lineTo(7, 11.3)
-      ..close();
-    canvas.drawPath(
-      shield,
-      Paint()
-        ..style = PaintingStyle.fill
-        ..color = const Color(0x0F2D8CFF),
-    );
-    canvas.drawPath(shield, paint);
-
-    final nPath = Path()
-      ..moveTo(17.5, 32)
-      ..lineTo(17.5, 17)
-      ..lineTo(30.5, 32)
-      ..lineTo(30.5, 17);
-    canvas.drawPath(
-      nPath,
-      paint..strokeWidth = strokeWidth + 1.1,
-    );
+    _paintNexLogo(canvas, strokeWidth);
   }
 
   @override
   bool shouldRepaint(covariant _NexLogoPainter oldDelegate) =>
       oldDelegate.strokeWidth != strokeWidth;
+}
+
+void _paintNexLogo(Canvas canvas, double strokeWidth) {
+  const gradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF5CC8FF), Color(0xFF2B8CFF), Color(0xFF0F4FE0)],
+    stops: [0, 0.55, 1],
+  );
+  const rect = Rect.fromLTWH(0, 0, 48, 48);
+  final paint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = strokeWidth
+    ..shader = gradient.createShader(rect)
+    ..strokeJoin = StrokeJoin.round
+    ..strokeCap = StrokeCap.round;
+
+  final shield = Path()
+    ..moveTo(24, 3.5)
+    ..lineTo(41, 11.3)
+    ..lineTo(41, 25.2)
+    ..cubicTo(41, 35, 33.4, 41.8, 24, 44.8)
+    ..cubicTo(14.6, 41.8, 7, 35, 7, 25.2)
+    ..lineTo(7, 11.3)
+    ..close();
+  canvas.drawPath(
+    shield,
+    Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0x0F2D8CFF),
+  );
+  canvas.drawPath(shield, paint);
+
+  final nPath = Path()
+    ..moveTo(17.5, 32)
+    ..lineTo(17.5, 17)
+    ..lineTo(30.5, 32)
+    ..lineTo(30.5, 17);
+  canvas.drawPath(nPath, paint..strokeWidth = strokeWidth + 1.1);
 }
 
 class CoinLogo extends StatelessWidget {
