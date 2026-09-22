@@ -23,21 +23,25 @@ class ApiEndpointResolver {
   }
 
   static Future<String?> probe(String url) async {
+    final dio = Dio(
+      BaseOptions(
+        baseUrl: url.endsWith('/') ? url.substring(0, url.length - 1) : url,
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 10),
+        headers: {
+          'Accept': 'application/json',
+          if (ApiConfig.apiKey != null && ApiConfig.apiKey!.isNotEmpty)
+            'X-FUTRE-API-Key': ApiConfig.apiKey!,
+        },
+      ),
+    );
     try {
-      final dio = Dio(
-        BaseOptions(
-          baseUrl: url.endsWith('/') ? url.substring(0, url.length - 1) : url,
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 10),
-          headers: {
-            'Accept': 'application/json',
-            if (ApiConfig.apiKey != null && ApiConfig.apiKey!.isNotEmpty)
-              'X-FUTRE-API-Key': ApiConfig.apiKey!,
-          },
-        ),
-      );
-      final response = await dio.get<Map<String, dynamic>>('/api/health');
+      final response = await dio.get<Map<String, dynamic>>('/health');
       if (response.data?['ok'] == true) return dio.options.baseUrl;
+    } catch (_) {}
+    try {
+      final fallback = await dio.get<Map<String, dynamic>>('/api/health');
+      if (fallback.data?['ok'] == true) return dio.options.baseUrl;
     } catch (e) {
       debugPrint('ApiEndpointResolver: $url unreachable ($e)');
     }

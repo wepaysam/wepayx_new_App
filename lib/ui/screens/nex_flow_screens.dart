@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/constants/assets.dart';
+import '../../core/constants/features.dart';
 import '../../core/utils/address_utils.dart';
 import '../../core/utils/formatters.dart';
 import '../../core/utils/tx_utils.dart';
@@ -1050,7 +1051,11 @@ class _NexSendFlowState extends State<NexSendFlow> {
               side: BorderSide(color: t.cardBorder),
             ),
             content: Text(
-              NexAccountRestrictionBanner.detailText(provider.accountStatus),
+              provider.needsEmailVerification
+                  ? 'Verify your email with the OTP we sent before using Send, Receive, or Swap.'
+                  : NexAccountRestrictionBanner.detailText(
+                      provider.accountStatus,
+                    ),
               style: TextStyle(color: t.text, height: 1.35),
             ),
           ),
@@ -1297,6 +1302,19 @@ class _NexSendFlowState extends State<NexSendFlow> {
     );
   }
 
+  /// Re-quotes the fee for this exact amount so percentage overrides and
+  /// per-user rates are shown on the review screen.
+  Future<void> _openReview() async {
+    setState(() => step = _SendStep.review);
+    if (asset == null || network == null) return;
+    final provider = context.read<WalletProvider>();
+    await provider.fetchFeeQuote(
+      symbol: asset!.symbol,
+      network: network!,
+      amount: _cryptoAmount(provider),
+    );
+  }
+
   double get _usdAmountNum => Formatters.parseDecimal(_amount.text);
 
   double _cryptoAmount(WalletProvider provider) {
@@ -1350,15 +1368,14 @@ class _NexSendFlowState extends State<NexSendFlow> {
       if (!mounted) return;
 
       final pending = provider.pendingWithdrawal;
-      final timedOut =
-          e.toString().toLowerCase().contains('longer than expected') ||
-          e.toString().toLowerCase().contains('timeout') ||
-          e.toString().contains('0:00:30');
-
-      if (timedOut &&
+      final alreadyBroadcast =
           pending != null &&
-          pending.asset == asset!.symbol &&
-          pending.network == network) {
+          pending.asset.toUpperCase() == asset!.symbol.toUpperCase() &&
+          pending.network.toLowerCase() == network!.toLowerCase();
+
+      // Chain TX can succeed while the HTTP response times out or returns
+      // a generic `request_failed`. Do not send the user back to Review.
+      if (alreadyBroadcast) {
         setState(() {
           result = WithdrawalResult(
             id: pending.id,
@@ -1572,7 +1589,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
                 const SizedBox(height: 12),
                 ...a.networks.map((n) {
                   final feeLine = provider.feeLineFor(a.symbol, n);
-                  final eta = kNetworkEta[n] ?? '';
+                  final eta = provider.feeEtaFor(a.symbol, n);
                   final netBalance = _balanceForNetwork(provider, n);
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
@@ -1654,7 +1671,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
         cryptoAmount > 0 &&
         cryptoAmount <= balance;
     final fee = provider.feeDisplayFor(a.symbol, n);
-    final eta = kNetworkEta[n] ?? '';
+    final eta = provider.feeEtaFor(a.symbol, n);
     final balanceLabel = 'Balance on $n';
 
     return ColoredBox(
@@ -1917,9 +1934,7 @@ class _NexSendFlowState extends State<NexSendFlow> {
             padding: NexLayout.flowFooterPadding(context),
             child: NexPrimaryButton(
               label: 'Review',
-              onPressed: valid
-                  ? () => setState(() => step = _SendStep.review)
-                  : null,
+              onPressed: valid ? _openReview : null,
             ),
           ),
         ],
@@ -2104,7 +2119,8 @@ class _NexSendFlowState extends State<NexSendFlow> {
         result?.netAmount?.toDouble() ?? _receiverGets(provider, a.symbol);
     final status = result?.status ?? 'pending_main_wallet';
     final feeNum =
-        result?.fee?.toDouble() ?? provider.feeDeductionFor(a.symbol, n);
+        result?.fee?.toDouble() ??
+        provider.feeDeductionFor(a.symbol, n, amount: cryptoAmt);
     final feeLabel = provider.feeDisplayFor(a.symbol, n);
     final txid = result?.txid;
     final allComplete = _withdrawalIsFullyComplete(status, txid);
@@ -2704,7 +2720,13 @@ class _NexSwapFlowState extends State<NexSwapFlow> {
               side: BorderSide(color: t.cardBorder),
             ),
             content: Text(
-              NexAccountRestrictionBanner.detailText(provider.accountStatus),
+              !kSwapEnabled
+                  ? 'Swap is temporarily unavailable. It will return in a later update.'
+                  : provider.needsEmailVerification
+                  ? 'Verify your email with the OTP we sent before using Send, Receive, or Swap.'
+                  : NexAccountRestrictionBanner.detailText(
+                      provider.accountStatus,
+                    ),
               style: TextStyle(color: t.text, height: 1.35),
             ),
           ),

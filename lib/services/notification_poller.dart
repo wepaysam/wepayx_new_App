@@ -49,13 +49,14 @@ Future<void> _pollInBackground() async {
   ).popupNotifications();
   if (notifications.isEmpty) return;
 
-  final latest = notifications.last;
-  await deliverPopupNotification(
-    latest,
-    showBanner: false,
-    showLocalNotification: true,
-    onBanner: (_) {},
-  );
+  for (final item in notifications) {
+    await deliverPopupNotification(
+      item,
+      showBanner: false,
+      showLocalNotification: true,
+      onBanner: (_) {},
+    );
+  }
 }
 
 class NotificationPoller {
@@ -64,12 +65,21 @@ class NotificationPoller {
   final WalletProvider _provider;
   Timer? _foregroundTimer;
   Timer? _priceTimer;
+  Timer? _walletTimer;
   bool _running = false;
+  bool _pollInFlight = false;
+
+  /// Notifications are cheap (one endpoint), so they poll fast.
+  static const _notificationInterval = Duration(seconds: 2);
+
+  /// Balances hit several wallet endpoints, so they refresh on a slower beat.
+  static const _walletInterval = Duration(seconds: 20);
 
   Future<void> start() async {
-    await registerBackgroundPolling();
     _startForegroundPolling();
+    _startWalletPolling();
     _startPricePolling();
+    unawaited(registerBackgroundPolling());
   }
 
   void stop() {
@@ -77,6 +87,8 @@ class NotificationPoller {
     _foregroundTimer = null;
     _priceTimer?.cancel();
     _priceTimer = null;
+    _walletTimer?.cancel();
+    _walletTimer = null;
     _running = false;
   }
 
@@ -104,17 +116,36 @@ class NotificationPoller {
     unawaited(_pollOnce());
     _foregroundTimer?.cancel();
     _foregroundTimer = Timer.periodic(
-      const Duration(seconds: 4),
+      _notificationInterval,
       (_) => _pollOnce(),
+    );
+  }
+
+  void _startWalletPolling() {
+    unawaited(_refreshWalletOnce());
+    _walletTimer?.cancel();
+    _walletTimer = Timer.periodic(
+      _walletInterval,
+      (_) => _refreshWalletOnce(),
     );
   }
 
   Future<void> pollOnResume() async {
     await Future.wait([
       _pollOnce(),
+      _refreshWalletOnce(),
       _provider.refreshPrices(),
       _provider.refreshAccountFeatures(),
     ]);
+  }
+
+  Future<void> _refreshWalletOnce() async {
+    if (_provider.user == null) return;
+    try {
+      await _provider.refreshWallet();
+    } catch (e) {
+      debugPrint('NotificationPoller: wallet refresh failed: $e');
+    }
   }
 
   void _startPricePolling() {
@@ -126,15 +157,17 @@ class NotificationPoller {
   }
 
   Future<void> _pollOnce() async {
-    if (_provider.user == null) return;
+    if (_provider.user == null || _pollInFlight) return;
+    _pollInFlight = true;
     try {
-      await _provider.refreshWallet();
       await _provider.pollNotifications(
         showBanner: true,
         showLocalNotification: true,
       );
     } catch (e) {
       debugPrint('NotificationPoller: foreground poll failed: $e');
+    } finally {
+      _pollInFlight = false;
     }
   }
 }

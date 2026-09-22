@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../services/security_service.dart';
+import '../core/constants/features.dart';
 import '../services/notification_poller.dart';
 import '../providers/wallet_provider.dart';
 import '../models/api_models.dart';
@@ -114,6 +115,26 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
         messenger: messenger,
       );
       navigate('verify-email');
+      return;
+    }
+
+    if (feature == 'swap' && !kSwapEnabled) {
+      final host = messenger ?? ScaffoldMessenger.maybeOf(context);
+      host?.clearSnackBars();
+      host?.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: tokens.cardBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: tokens.cardBorder),
+          ),
+          content: Text(
+            'Swap is temporarily unavailable. It will return in a later update.',
+            style: TextStyle(color: tokens.text, height: 1.35),
+          ),
+        ),
+      );
       return;
     }
 
@@ -324,7 +345,11 @@ class _NexAppRootState extends State<NexAppRoot> with WidgetsBindingObserver {
     if (provider.user == null && !authScreens.contains(current.screen)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        setState(() => stack = [const NexRoute('login')]);
+        if (provider.pendingSignupEmail != null) {
+          setState(() => stack = [const NexRoute('verify-email')]);
+        } else {
+          setState(() => stack = [const NexRoute('login')]);
+        }
       });
     }
     AppAnnouncement? pinnedAnnouncement;

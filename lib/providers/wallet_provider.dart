@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 import '../config/otp_bypass.dart';
 import '../core/constants/assets.dart';
+import '../core/constants/features.dart';
 import '../models/api_models.dart';
 import '../models/user_model.dart';
 import '../models/wallet_model.dart';
@@ -16,6 +17,8 @@ import '../services/api_endpoint_resolver.dart';
 import '../services/coinbase_price_service.dart';
 import '../services/notification_delivery.dart';
 import '../services/security_service.dart';
+import '../services/session_cache.dart';
+import '../services/telegram_id_store.dart';
 
 class AssetBalanceView {
   AssetBalanceView({
@@ -52,6 +55,7 @@ class WalletProvider extends ChangeNotifier {
   AccountStatusInfo? accountStatus;
   List<AppAnnouncement> announcements = [];
   bool accountFeaturesLoading = false;
+  Future<void>? _walletRefresh;
   bool balanceVisible = true;
   bool isDark = true;
   bool loading = false;
@@ -66,8 +70,17 @@ class WalletProvider extends ChangeNotifier {
   String? pendingLoginEmail;
   String? _pendingLoginPassword;
 
+  /// Signup OTP challenge — account is created only after confirm.
+  String? pendingSignupEmail;
+  String? _pendingSignupPassword;
+  String? _pendingSignupName;
+  bool signupOtpSent = false;
+
+  String? get verificationEmail => pendingSignupEmail ?? user?.email;
+
   /// True when the signed-in user still needs the email OTP step.
   bool get needsEmailVerification {
+    if (pendingSignupEmail != null) return true;
     final current = user;
     if (current == null) return false;
     if (OtpBypass.isExempt(current.email)) return false;
@@ -117,14 +130,25 @@ class WalletProvider extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedKey = prefs.getString('futre_api_key');
-      if (savedKey != null && savedKey.isNotEmpty) {
+      final bakedIn = ApiConfig.apiKey;
+      if (bakedIn != null && bakedIn.isNotEmpty) {
+        await prefs.setString('futre_api_key', bakedIn);
+      } else if (savedKey != null && savedKey.isNotEmpty) {
         ApiConfig.setApiKey(savedKey);
       }
       isDark = prefs.getBool('dark_theme') ?? true;
 
-      await ApiEndpointResolver.resolveAndPersist(prefs);
-      await ApiClient.instance.init();
-      await restoreSession();
+      // Paint the last known session from disk so a cold start goes straight to
+      // the wallet. The live refresh below replaces it as soon as it lands.
+      if (await _hydrateCachedSession()) {
+        loading = false;
+        initialized = true;
+        notifyListeners();
+        unawaited(_connectAndRestoreSessionSafely(prefs));
+        return;
+      }
+
+      await _connectAndRestoreSession(prefs);
     } catch (e) {
       error = e.toString();
     } finally {
@@ -134,23 +158,74 @@ class WalletProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> _connectAndRestoreSession(SharedPreferences prefs) async {
+    await ApiEndpointResolver.resolveAndPersist(prefs);
+    await ApiClient.instance.init();
+    await restoreSession();
+  }
+
+  /// Background variant used when cached data is already on screen — failures
+  /// must not escape, the cached view simply stays until the next refresh.
+  Future<void> _connectAndRestoreSessionSafely(SharedPreferences prefs) async {
+    try {
+      await _connectAndRestoreSession(prefs);
+    } catch (e) {
+      debugPrint('WalletProvider: background session restore failed: $e');
+    }
+  }
+
+  /// Loads the cached session snapshot. Returns false when there is nothing
+  /// usable to show, in which case the normal online path runs.
+  Future<bool> _hydrateCachedSession() async {
+    final cached = await SessionCache.read();
+    if (cached == null) return false;
+    try {
+      final session = AuthSession.fromJson(cached);
+      if (session.user == null) return false;
+      user = session.user;
+      wallet = session.wallet;
+      events = session.events;
+      await _applyRestoredUserFlags();
+      await _hydrateCachedPrices();
+      return true;
+    } catch (e) {
+      debugPrint('WalletProvider: cached session unusable: $e');
+      return false;
+    }
+  }
+
+  /// Uses the last known prices so cached balances are not valued with the
+  /// hardcoded asset defaults before the live prices arrive.
+  Future<void> _hydrateCachedPrices() async {
+    final cached = await SessionCache.readPrices();
+    if (cached == null) return;
+    try {
+      final snapshot = CryptoPricesSnapshot.fromJson(cached);
+      if (snapshot.prices.isEmpty) return;
+      prices = snapshot.prices;
+      pricesUpdatedAt = snapshot.updatedAt;
+      pricesSource = snapshot.source;
+      pricesStale = snapshot.stale;
+    } catch (e) {
+      debugPrint('WalletProvider: cached prices unusable: $e');
+    }
+  }
+
   /// Restores the logged-in user from the persisted session cookie.
   Future<bool> restoreSession() async {
     try {
       await ApiClient.instance.init();
-      final session = await _api.me();
+      final session = await _api.liveWalletSession();
       user = session.user;
       wallet = session.wallet;
       events = session.events;
       if (user != null) {
-        await _restoreLocalEmailVerification(user!.id);
-        if (OtpBypass.isExempt(user!.email)) {
-          pendingEmailVerification = false;
-          user = user!.copyWith(emailVerified: true);
-        } else if (user!.emailVerified == false) {
-          // If backend says unverified, keep forcing the OTP step.
-          pendingEmailVerification = true;
-        }
+        await _applyRestoredUserFlags();
+        try {
+          await SessionCache.save(await _api.meRaw(email: user?.email));
+        } catch (_) {}
+      } else {
+        await SessionCache.clear();
       }
       notifyListeners();
       unawaited(
@@ -163,18 +238,50 @@ class WalletProvider extends ChangeNotifier {
       return user != null;
     } catch (e) {
       error = e.toString();
-      // If the cookie token is stale/invalid, clear it so we don't keep
-      // trying to use a guest session (Receive/Deposit may otherwise show
-      // blank QR/address).
-      await ApiClient.instance.clearCookies();
-      user = null;
-      wallet = const WalletModel();
-      events = [];
-      accountStatus = null;
-      announcements = [];
-      pendingEmailVerification = false;
-      _clearPendingLogin();
+
+      // Only the server may end a session. Timeouts, DNS failures, 5xx and
+      // unreadable cookie files are transient, so the saved login is kept —
+      // otherwise a moment of bad connectivity signs the user out for good.
+      if (!ApiClient.isSessionExpiredError(e)) {
+        debugPrint('WalletProvider: session restore deferred (transient): $e');
+        notifyListeners();
+        return user != null;
+      }
+
+      // Stale/invalid token: clear it so we don't keep trying to use a guest
+      // session (Receive/Deposit may otherwise show blank QR/address).
+      await _endExpiredSession();
       return false;
+    }
+  }
+
+  /// Drops a session the server has rejected, so the app asks for a fresh
+  /// login instead of showing a signed-in shell with no wallet data.
+  Future<void> _endExpiredSession() async {
+    await ApiClient.instance.clearCookies();
+    await SessionCache.clear();
+    user = null;
+    wallet = const WalletModel();
+    events = [];
+    accountStatus = null;
+    announcements = [];
+    pendingEmailVerification = false;
+    _clearPendingLogin();
+    _clearPendingSignup();
+    notifyListeners();
+  }
+
+  /// Normalises email-verification state for a session restored from the API
+  /// or from the cached snapshot.
+  Future<void> _applyRestoredUserFlags() async {
+    if (user == null) return;
+    await _restoreLocalEmailVerification(user!.id);
+    if (OtpBypass.isExempt(user!.email)) {
+      pendingEmailVerification = false;
+      user = user!.copyWith(emailVerified: true);
+    } else if (user!.emailVerified == false) {
+      // If backend says unverified, keep forcing the OTP step.
+      pendingEmailVerification = true;
     }
   }
 
@@ -240,52 +347,62 @@ class WalletProvider extends ChangeNotifier {
     required String password,
     String? name,
   }) async {
-    final session = await _api.signup(
-      email: email,
+    await _api.requestSignup(
+      email: email.trim(),
       password: password,
-      name: name,
+      username: name,
     );
-    _applySession(session);
-    pendingEmailVerification = !OtpBypass.isExempt(email);
-    // New signups are unverified until OTP confirm succeeds (unless exempt).
-    if (user != null && user!.emailVerified != true && !OtpBypass.isExempt(email)) {
-      user = user!.copyWith(emailVerified: false);
-    } else if (user != null && OtpBypass.isExempt(email)) {
-      user = user!.copyWith(emailVerified: true);
-    }
+    pendingSignupEmail = email.trim();
+    _pendingSignupPassword = password;
+    _pendingSignupName = name;
+    signupOtpSent = true;
+    pendingEmailVerification = true;
+    user = null;
   }
 
   Future<void> requestSignupEmailVerification() async {
-    final email = user?.email;
-    if (email == null || email.isEmpty) {
-      throw Exception('No email available for verification');
+    final email = pendingSignupEmail ?? user?.email;
+    final password = _pendingSignupPassword;
+    if (email == null || email.isEmpty || password == null) {
+      throw Exception('Start signup again to request a new code');
     }
     await _withApiRetry(
-      () => _api.requestSignupEmailVerification(email: email),
+      () => _api.requestSignup(
+        email: email,
+        password: password,
+        username: _pendingSignupName,
+      ),
     );
+    signupOtpSent = true;
   }
 
   Future<void> confirmSignupEmailVerification(String otp) async {
-    final email = user?.email;
-    if (email == null || email.isEmpty) {
-      throw Exception('No email available for verification');
+    final email = pendingSignupEmail ?? user?.email;
+    final password = _pendingSignupPassword;
+    if (email == null || email.isEmpty || password == null) {
+      throw Exception('Start signup again to verify your code');
     }
     final code = otp.trim();
     if (code.length < 4) {
       throw Exception('Enter the verification code from your email');
     }
 
-    final updated = await _withApiRetry(
-      () => _api.confirmSignupEmailVerification(email: email, otp: code),
+    final session = await _withApiRetry(
+      () => _api.confirmSignup(
+        email: email,
+        password: password,
+        otp: code,
+        username: _pendingSignupName,
+      ),
     );
 
-    if (updated != null) {
-      user = updated.copyWith(emailVerified: updated.emailVerified ?? true);
-    } else if (user != null) {
+    _applySession(session);
+    if (user != null) {
       user = user!.copyWith(emailVerified: true);
     }
-
     pendingEmailVerification = false;
+    _clearPendingSignup();
+    await _afterAuthSessionApplied();
     final id = user?.id;
     if (id != null) {
       _locallyVerifiedUserIds.add(id);
@@ -333,28 +450,12 @@ class WalletProvider extends ChangeNotifier {
       _applySession(AuthSession.fromJson(data));
       await _afterAuthSessionApplied();
       _clearPendingLogin();
+      unawaited(refreshWallet());
       return;
     }
 
     final otpRequired = data['loginOtpRequired'] == true;
-    if (otpRequired && OtpBypass.isExempt(email)) {
-      // Exempt test accounts: try magic OTP confirm (local/dev). If production
-      // rejects it, fall through to the normal OTP screen.
-      try {
-        final session = await _api.confirmLoginEmailVerification(
-          email: email.trim(),
-          otp: OtpBypass.magicLoginOtp,
-        );
-        _applySession(session);
-        await _afterAuthSessionApplied();
-        _clearPendingLogin();
-        return;
-      } catch (_) {
-        // Keep going to OTP challenge below.
-      }
-    }
-
-    if (otpRequired || data['ok'] == true) {
+    if (otpRequired || data['ok'] == true || data['message'] == 'login_otp_sent') {
       pendingLoginEmail = email.trim();
       _pendingLoginPassword = password;
       return;
@@ -394,6 +495,7 @@ class WalletProvider extends ChangeNotifier {
       _applySession(session);
       await _afterAuthSessionApplied();
       _clearPendingLogin();
+      unawaited(refreshWallet());
     } catch (e) {
       error = e.toString();
       rethrow;
@@ -422,6 +524,13 @@ class WalletProvider extends ChangeNotifier {
     _pendingLoginPassword = null;
   }
 
+  void _clearPendingSignup() {
+    pendingSignupEmail = null;
+    _pendingSignupPassword = null;
+    _pendingSignupName = null;
+    signupOtpSent = false;
+  }
+
   Future<void> requestForgotPassword(String email) async {
     await _withApiRetry(() => _api.requestForgotPassword(email: email.trim()));
   }
@@ -431,13 +540,29 @@ class WalletProvider extends ChangeNotifier {
     required String otp,
     required String newPassword,
   }) async {
-    await _withApiRetry(
+    final lockedUntil = await _withApiRetry(
       () => _api.confirmForgotPassword(
         email: email.trim(),
         otp: otp.trim(),
         newPassword: newPassword,
       ),
     );
+    if (lockedUntil != null) {
+      accountStatus = (accountStatus ??
+              const AccountStatusInfo(
+                status: 'active',
+                isRestricted: false,
+                isFrozen: false,
+                message: '',
+                blockedFeatures: {
+                  'withdrawal': true,
+                  'swap': true,
+                },
+                affectedFeatures: ['withdrawal', 'swap'],
+                supportRequired: false,
+              ))
+          .withLockedUntil(lockedUntil);
+    }
   }
 
   Future<String?> requestAccountDelete({required String password}) async {
@@ -465,9 +590,12 @@ class WalletProvider extends ChangeNotifier {
         otp: otp.trim(),
       ),
     );
+    await TelegramIdStore.rotate();
     try {
       await _api.logout();
     } catch (_) {}
+    await ApiClient.instance.clearCookies();
+    await SessionCache.clear();
     user = null;
     wallet = const WalletModel();
     events = [];
@@ -475,6 +603,7 @@ class WalletProvider extends ChangeNotifier {
     announcements = [];
     pendingEmailVerification = false;
     _clearPendingLogin();
+    _clearPendingSignup();
     await clearLastNotificationId();
     notifyListeners();
   }
@@ -483,6 +612,8 @@ class WalletProvider extends ChangeNotifier {
     try {
       await _api.logout();
     } catch (_) {}
+    await ApiClient.instance.clearCookies();
+    await SessionCache.clear();
     user = null;
     wallet = const WalletModel();
     events = [];
@@ -490,13 +621,14 @@ class WalletProvider extends ChangeNotifier {
     announcements = [];
     pendingEmailVerification = false;
     _clearPendingLogin();
+    _clearPendingSignup();
     await clearLastNotificationId();
     notifyListeners();
   }
 
   bool isFeatureBlocked(String feature) {
+    if (feature == 'swap' && !kSwapEnabled) return true;
     if (needsEmailVerification) {
-      // Trusted wallet actions stay locked until email OTP is confirmed.
       if (feature == 'deposit' ||
           feature == 'withdrawal' ||
           feature == 'swap') {
@@ -505,7 +637,13 @@ class WalletProvider extends ChangeNotifier {
     }
     final status = accountStatus;
     if (status == null) return false;
-    return status.isFrozen || status.blocks(feature);
+    if (status.hasRestrictions) return true;
+    if ((feature == 'withdrawal' || feature == 'swap') && !status.canWithdraw) {
+      return true;
+    }
+    return status.securityLocks.any(
+      (lock) => lock.isActive && lock.matchesFeature(feature),
+    );
   }
 
   Future<void> refreshAccountFeatures({bool force = false}) async {
@@ -514,7 +652,28 @@ class WalletProvider extends ChangeNotifier {
     accountFeaturesLoading = true;
     try {
       try {
-        accountStatus = await _api.accountStatus();
+        accountStatus = await _api.accountStatus(
+          email: user?.email,
+          telegramId: user?.telegramId,
+        );
+        final nexTelegramId = accountStatus?.telegramId;
+        if (nexTelegramId != null &&
+            nexTelegramId.isNotEmpty &&
+            user != null &&
+            user!.telegramId != nexTelegramId) {
+          user = user!.copyWith(telegramId: nexTelegramId);
+        }
+        debugPrint(
+          'WalletProvider: users/check restricted=${accountStatus?.isRestricted} '
+          'blocked=${accountStatus?.isRestricted} frozen=${accountStatus?.isFrozen} '
+          'can_withdraw=${accountStatus?.canWithdraw} '
+          'locks=${accountStatus?.securityLocks.length} '
+          'hasRestrictions=${accountStatus?.hasRestrictions} '
+          'hasSecurityHold=${accountStatus?.hasSecurityHold} '
+          'emailGate=$needsEmailVerification '
+          'sendBlocked=${isFeatureBlocked('withdrawal')} '
+          'swapBlocked=${isFeatureBlocked('swap')}',
+        );
       } catch (e) {
         debugPrint('WalletProvider: account status refresh failed: $e');
       }
@@ -569,13 +728,110 @@ class WalletProvider extends ChangeNotifier {
 
   Future<void> refreshWallet() async {
     if (user == null) return;
+    // Several screens and the poller can ask at once; one flight is enough.
+    final inFlight = _walletRefresh;
+    if (inFlight != null) return inFlight;
+    final refresh = _refreshWalletOnce();
+    _walletRefresh = refresh;
     try {
-      final session = await _api.wallet();
+      await refresh;
+    } finally {
+      _walletRefresh = null;
+    }
+  }
+
+  Future<void> _refreshWalletOnce() async {
+    try {
+      final results = await Future.wait([
+        _api.liveWalletSession(email: user?.email),
+        _api
+            .ledgerHistory(email: user?.email)
+            .catchError((Object e) {
+              debugPrint('WalletProvider: ledger history failed: $e');
+              return const <ActivityItem>[];
+            }),
+      ]);
+      final session = results[0] as AuthSession;
+      final history = results[1] as List<ActivityItem>;
+
       user = session.user ?? user;
-      wallet = session.wallet;
+      wallet = WalletModel(
+        addresses: session.wallet.addresses,
+        balances: session.wallet.balances,
+        // Ledger history is the authoritative record; the wallet payload's
+        // activity is only a fallback when the ledger call fails.
+        activity: history.isNotEmpty ? history : session.wallet.activity,
+        pendingWithdrawal: session.wallet.pendingWithdrawal,
+      );
       events = session.events;
+      debugPrint(
+        'WalletProvider: applied wallet balances=${wallet.balances.length} '
+        'total=${wallet.balances.fold<double>(0, (sum, row) => sum + row.balance)} '
+        'addresses=${wallet.addresses.length} '
+        'history=${wallet.activity.length}',
+      );
       notifyListeners();
-    } catch (_) {}
+      await SessionCache.save({
+        'user': _cachedUserPayload(),
+        'wallet': {
+          'addresses': wallet.addresses,
+          'balances': [
+            for (final row in wallet.balances)
+              {
+                'asset': row.asset,
+                'network': row.network,
+                'balance': row.balance,
+              },
+          ],
+          'activity': [
+            for (final item in wallet.activity)
+              {
+                'id': item.id,
+                'direction': item.type,
+                'asset': item.asset,
+                'network': item.network,
+                'amount': item.amount,
+                'status': item.status,
+                'created_at': ?item.createdAt,
+                'fee': ?item.fee,
+                'netAmount': ?item.netAmount,
+                'to_address': ?item.toAddress,
+                'txid': ?item.txid,
+                'reference': ?item.reference,
+              },
+          ],
+        },
+        'events': [
+          for (final event in events)
+            {
+              'action': event.action,
+              'detail': event.detail,
+              'created_at': event.createdAt,
+            },
+        ],
+      });
+    } catch (e) {
+      debugPrint('WalletProvider: refreshWallet failed: $e');
+      if (ApiClient.isSessionExpiredError(e)) {
+        debugPrint('WalletProvider: session rejected by server, signing out');
+        await _endExpiredSession();
+      }
+    }
+  }
+
+  Map<String, dynamic>? _cachedUserPayload() {
+    final current = user;
+    if (current == null) return null;
+    return {
+      'id': current.id,
+      'email': current.email,
+      'name': current.name,
+      'created_at': current.createdAt,
+      if (current.emailVerified != null) 'emailVerified': current.emailVerified,
+      if (current.emailVerifiedAt != null)
+        'emailVerifiedAt': current.emailVerifiedAt,
+      if (current.telegramId != null) 'telegram_id': current.telegramId,
+    };
   }
 
   Future<void> _refreshPrices() async {
@@ -584,7 +840,11 @@ class WalletProvider extends ChangeNotifier {
     try {
       snapshot = await _api.cryptoPricesRaw();
       if (isUsableBackendPrices(snapshot)) {
-        _applyPriceSnapshot(snapshot);
+        debugPrint(
+          'WalletProvider: live rates ok source=${snapshot.source} '
+          'symbols=${snapshot.prices.keys.length} stale=${snapshot.stale}',
+        );
+        _applyPriceSnapshot(await _withMarketFallback(snapshot));
         await _refreshFearGreed();
         return;
       }
@@ -606,6 +866,31 @@ class WalletProvider extends ChangeNotifier {
     await _refreshFearGreed();
   }
 
+  /// The live rate API quotes BTC, ETH, BNB, TRX, USDT and USDC only. Market
+  /// screen symbols outside that set are filled from Coinbase.
+  Future<CryptoPricesSnapshot> _withMarketFallback(
+    CryptoPricesSnapshot snapshot,
+  ) async {
+    final missing = kMarketSymbols
+        .where((symbol) => !snapshot.prices.containsKey(symbol))
+        .toList();
+    if (missing.isEmpty) return snapshot;
+
+    final extra = await CoinbasePriceService.instance.fetchPrices();
+    if (extra == null || extra.prices.isEmpty) return snapshot;
+
+    return CryptoPricesSnapshot(
+      prices: {
+        for (final symbol in missing)
+          if (extra.prices[symbol] != null) symbol: extra.prices[symbol]!,
+        ...snapshot.prices,
+      },
+      updatedAt: snapshot.updatedAt,
+      source: snapshot.source,
+      stale: snapshot.stale,
+    );
+  }
+
   Future<void> _refreshFearGreed() async {
     final data = await CoinbasePriceService.instance.fetchFearGreed();
     if (data == null) return;
@@ -619,12 +904,36 @@ class WalletProvider extends ChangeNotifier {
     pricesSource = snapshot.source;
     pricesStale = snapshot.stale;
     notifyListeners();
+    unawaited(
+      SessionCache.savePrices({
+        'prices': snapshot.prices.map(
+          (symbol, price) => MapEntry(symbol, {
+            'price': price.price,
+            'change24h': ?price.change24h,
+          }),
+        ),
+        'updatedAt': ?snapshot.updatedAt,
+        'source': ?snapshot.source,
+        'stale': snapshot.stale,
+      }),
+    );
   }
 
+  /// Fee row for the selected asset/network.
+  ///
+  /// The live API keys rows both ways (`USDT_TRC20` and `USDT_TRON`), so both
+  /// spellings are tried.
   WithdrawalFeeInfo? feeFor({required String symbol, required String network}) {
-    final key = withdrawalAssetKey(symbol, network);
-    if (key == null) return null;
-    return feesByAssetKey[key];
+    final sym = symbol.toUpperCase();
+    for (final key in [
+      ?withdrawalAssetKey(sym, network),
+      '${sym}_$network',
+      sym,
+    ]) {
+      final info = feesByAssetKey[key];
+      if (info != null) return info;
+    }
+    return null;
   }
 
   String feeDisplayFor(String symbol, String network) {
@@ -633,9 +942,15 @@ class WalletProvider extends ChangeNotifier {
     return info.display;
   }
 
-  double feeDeductionFor(String symbol, String network) {
-    return feeFor(symbol: symbol, network: network)?.deductionAmount(symbol) ??
-        0;
+  /// Fee for [amount], in units of [symbol]. USD fees are converted with the
+  /// live rate, and percentage overrides scale with the amount.
+  double feeDeductionFor(String symbol, String network, {double amount = 0}) {
+    final info = feeFor(symbol: symbol, network: network);
+    if (info == null) return 0;
+    return info.deductionAmount(
+      amount: amount,
+      priceUsd: prices[symbol.toUpperCase()]?.price ?? 0,
+    );
   }
 
   double receiverGetsAmount({
@@ -643,31 +958,73 @@ class WalletProvider extends ChangeNotifier {
     required String network,
     required double amount,
   }) {
-    final deduction = feeDeductionFor(symbol, network);
+    final deduction = feeDeductionFor(symbol, network, amount: amount);
     if (deduction > 0) {
       return (amount - deduction).clamp(0, double.infinity);
     }
     return amount;
   }
 
+  String feeEtaFor(String symbol, String network) {
+    final info = feeFor(symbol: symbol, network: network);
+    final text = info?.timeframeText;
+    if (text != null && text.isNotEmpty) return text;
+    return kNetworkEta[network] ?? '';
+  }
+
   String feeLineFor(String symbol, String network) {
     final display = feeDisplayFor(symbol, network);
     if (display == '—') return '';
-    final eta = kNetworkEta[network] ?? '';
+    final eta = feeEtaFor(symbol, network);
     return eta.isEmpty ? 'Fee $display' : 'Fee $display · $eta';
   }
 
   Future<Map<String, dynamic>> fetchFees() async {
     final data = await _api.fees();
-    feesPayload = data;
-    final rows = data['rows'] as List<dynamic>? ?? [];
-    feesByAssetKey = {
-      for (final row in rows.whereType<Map<String, dynamic>>())
-        if ((row['assetKey'] as String?)?.isNotEmpty ?? false)
-          row['assetKey'] as String: WithdrawalFeeInfo.fromJson(row),
-    };
-    notifyListeners();
+    _applyFeePayload(data);
     return data;
+  }
+
+  /// Amount-aware quote: picks up percentage overrides for the signed-in user.
+  Future<WithdrawalFeeInfo?> fetchFeeQuote({
+    required String symbol,
+    required String network,
+    required double amount,
+  }) async {
+    try {
+      final data = await _api.fees(
+        asset: symbol,
+        network: network,
+        amount: amount,
+      );
+      _applyFeePayload(data);
+      return feeFor(symbol: symbol, network: network);
+    } catch (e) {
+      debugPrint('WalletProvider: fee quote failed: $e');
+      return feeFor(symbol: symbol, network: network);
+    }
+  }
+
+  void _applyFeePayload(Map<String, dynamic> data) {
+    feesPayload = data;
+    final rows = [
+      ...(data['fees'] as List<dynamic>? ?? []),
+      ...(data['rows'] as List<dynamic>? ?? []),
+      ...(data['feeRows'] as List<dynamic>? ?? []),
+      if (data['selected'] is Map<String, dynamic>) data['selected'],
+    ];
+
+    final byKey = <String, WithdrawalFeeInfo>{};
+    for (final row in rows.whereType<Map<String, dynamic>>()) {
+      final info = WithdrawalFeeInfo.fromJson(row);
+      for (final key in info.aliases) {
+        byKey[key] = info;
+      }
+    }
+    if (byKey.isNotEmpty) {
+      feesByAssetKey = byKey;
+      notifyListeners();
+    }
   }
 
   Future<void> _refreshFees() async {
@@ -684,13 +1041,14 @@ class WalletProvider extends ChangeNotifier {
     try {
       final notifications = await _api.popupNotifications();
       if (notifications.isEmpty) return;
-      final latest = notifications.last;
-      await deliverPopupNotification(
-        latest,
-        showBanner: showBanner,
-        showLocalNotification: showLocalNotification,
-        onBanner: showPushNotification,
-      );
+      for (final item in notifications) {
+        await deliverPopupNotification(
+          item,
+          showBanner: showBanner,
+          showLocalNotification: showLocalNotification,
+          onBanner: showPushNotification,
+        );
+      }
     } catch (_) {}
   }
 
@@ -739,6 +1097,7 @@ class WalletProvider extends ChangeNotifier {
 
   Future<void> _handleSessionExpired() async {
     await ApiClient.instance.clearCookies();
+    await SessionCache.clear();
     user = null;
     wallet = const WalletModel();
     events = [];
@@ -746,6 +1105,7 @@ class WalletProvider extends ChangeNotifier {
     announcements = [];
     pendingEmailVerification = false;
     _clearPendingLogin();
+    _clearPendingSignup();
     notifyListeners();
   }
 
@@ -823,5 +1183,16 @@ class WalletProvider extends ChangeNotifier {
     SecurityService.instance.unlock();
     Future.microtask(registerPushToken);
     Future.microtask(refreshAccountFeatures);
+    Future.microtask(refreshWallet);
+    final cachedUser = _cachedUserPayload();
+    if (cachedUser != null) {
+      unawaited(
+        SessionCache.save({
+          'user': cachedUser,
+          'wallet': <String, dynamic>{},
+          'events': <dynamic>[],
+        }),
+      );
+    }
   }
 }

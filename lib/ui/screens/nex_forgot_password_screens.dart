@@ -272,8 +272,8 @@ class _NexForgotPasswordResetScreenState
       setState(() => _error = 'Enter the 6-digit code from your email');
       return;
     }
-    if (_password.text.length < 6) {
-      setState(() => _error = 'Password must be at least 6 characters');
+    if (_password.text.length < 8) {
+      setState(() => _error = 'Password must be at least 8 characters');
       return;
     }
     if (_password.text != _confirm.text) {
@@ -412,7 +412,7 @@ class _NexForgotPasswordResetScreenState
                 NexField(
                   label: 'New password',
                   controller: _password,
-                  placeholder: 'At least 6 characters',
+                  placeholder: 'At least 8 characters',
                   obscure: !_showPassword,
                   onToggleObscure: () =>
                       setState(() => _showPassword = !_showPassword),
@@ -453,7 +453,7 @@ class _NexForgotPasswordResetScreenState
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'After you update your password, you’ll sign in again with the new one.',
+                          'After you update your password, withdrawals and swaps stay locked for a short time. Sign in again with the new password.',
                           style: TextStyle(
                             color: t.text2,
                             fontSize: 12,

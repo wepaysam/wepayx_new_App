@@ -30,10 +30,36 @@ class NexAccountRestrictionBanner extends StatelessWidget {
     if (status.isFrozen) {
       return 'Your account is frozen, so wallet actions are unavailable right now. Contact support for further help.';
     }
-    if (status.blocks('withdrawal') && !status.blocks('swap')) {
-      return 'Your account is restricted from withdrawing funds. You can still swap and use the other app services. Contact support for further help.';
+    if (status.hasRestrictions) {
+      return summaryText;
     }
-    return summaryText;
+    if (status.hasSecurityHold) {
+      final until = status.lockedUntil;
+      final reason = status.message.trim().isNotEmpty
+          ? status.message
+          : 'a recent password reset';
+      if (until != null) {
+        return 'Withdrawals and swaps are temporarily locked until ${_formatHold(until)} ($reason). This is not an account restriction.';
+      }
+      return 'Withdrawals are temporarily locked ($reason). This is not an account restriction.';
+    }
+    if (status.blocks('withdrawal') && !status.blocks('swap')) {
+      return 'Withdrawals are paused right now. You can still swap and use other app services.';
+    }
+    if (status.blocks('withdrawal') || status.blocks('swap')) {
+      return 'Send and swap are paused right now. Contact support if this lasts.';
+    }
+    return 'This action is unavailable right now.';
+  }
+
+  static String _formatHold(DateTime until) {
+    final local = until.toLocal();
+    final y = local.year.toString().padLeft(4, '0');
+    final m = local.month.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    final h = local.hour.toString().padLeft(2, '0');
+    final min = local.minute.toString().padLeft(2, '0');
+    return '$y-$m-$d $h:$min';
   }
 
   void showInfo(BuildContext context) {
@@ -133,7 +159,11 @@ class NexAccountRestrictionBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  frozen ? 'Account frozen' : 'Account restricted',
+                  frozen
+                      ? 'Account frozen'
+                      : status.hasRestrictions
+                      ? 'Account restricted'
+                      : 'Temporary security hold',
                   style: TextStyle(
                     color: t.text,
                     fontSize: 14,
@@ -142,7 +172,9 @@ class NexAccountRestrictionBanner extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  summaryText,
+                  frozen || status.hasRestrictions
+                      ? summaryText
+                      : NexAccountRestrictionBanner.detailText(status),
                   style: TextStyle(color: t.text2, fontSize: 12, height: 1.4),
                 ),
                 if (status.supportRequired) ...[

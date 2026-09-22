@@ -99,6 +99,54 @@ AssetDefinition? assetById(String id) {
   return null;
 }
 
+/// Maps NEX ledger keys (`USDT_TRON`) to app asset + network (`USDT` / `TRC20`).
+({String asset, String network}) appAssetFromLedger(
+  String raw, {
+  String? network,
+}) {
+  final key = raw.toUpperCase().replaceAll('-', '_').trim();
+  if (network != null &&
+      network.isNotEmpty &&
+      !key.contains('_') &&
+      key != 'USDT' &&
+      key != 'USDC') {
+    return (asset: key, network: network);
+  }
+  switch (key) {
+    case 'USDT_TRON':
+    case 'USDT_TRC20':
+      return (asset: 'USDT', network: 'TRC20');
+    case 'USDT_BNB':
+    case 'USDT_BEP20':
+    case 'USDT_BSC':
+      return (asset: 'USDT', network: 'BEP20');
+    case 'USDT_ERC':
+    case 'USDT_ERC20':
+    case 'USDT_ETH':
+      return (asset: 'USDT', network: 'ERC20');
+    case 'USDC_ERC':
+    case 'USDC_ERC20':
+    case 'USDC_ETH':
+      return (asset: 'USDC', network: 'ERC20');
+    case 'TRX':
+    case 'TRON':
+      return (asset: 'TRX', network: 'TRC20');
+    case 'ETH':
+      return (asset: 'ETH', network: 'ERC20');
+    case 'BNB':
+      return (asset: 'BNB', network: 'BEP20');
+    case 'BTC':
+    case 'BTC_BITCOIN':
+      return (asset: 'BTC', network: 'Bitcoin');
+    default:
+      if (key.contains('_')) {
+        final parts = key.split('_');
+        return (asset: parts.first, network: parts.sublist(1).join('_'));
+      }
+      return (asset: key, network: network ?? '');
+  }
+}
+
 String? withdrawalAssetKey(String symbol, String network) {
   switch ('${symbol.toUpperCase()}_$network') {
     case 'USDT_TRC20':

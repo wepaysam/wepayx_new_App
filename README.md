@@ -59,6 +59,7 @@ Your API should implement the same endpoints the web app uses. Minimum set for t
 | POST | `/api/swap-estimate` | Yes | Swap quote |
 | POST | `/api/swap-exchange` | Yes | Create swap |
 | GET | `/api/popup-notifications` | Yes | Deposit/withdraw alerts |
+| POST | `/api/notifications/popup` | API key | Telegram popup; blocked users need `force=true` |
 
 ### Auth
 

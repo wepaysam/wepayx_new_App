@@ -1,7 +1,6 @@
 import '../models/api_models.dart';
 import '../models/user_model.dart';
 import '../models/wallet_model.dart';
-import '../config/otp_bypass.dart';
 import 'api_client.dart';
 
 class WalletApi {
@@ -10,8 +9,12 @@ class WalletApi {
   final ApiClient _client;
 
   Future<bool> health() async {
-    final data = await _client.get('/api/health');
-    return data['ok'] == true;
+    try {
+      final data = await _client.get('/health');
+      if (data['ok'] == true) return true;
+    } catch (_) {}
+    final fallback = await _client.get('/api/health');
+    return fallback['ok'] == true;
   }
 
   Future<Map<String, dynamic>> catalog() async {
@@ -24,86 +27,127 @@ class WalletApi {
     return AppUpdateInfo.fromJson(raw);
   }
 
-  Future<AuthSession> me() async {
-    final data = await _client.get('/api/me');
-    return AuthSession.fromJson(data);
+  Future<AuthSession> me({String? email}) async {
+    return AuthSession.fromJson(await meRaw(email: email));
   }
 
-  Future<AuthSession> signup({
+  /// Live NEX: POST /api/users/me or POST /api/me, then GET compatibility paths.
+  Future<Map<String, dynamic>> meRaw({String? email}) async {
+    final body = _sessionLookupBody(email: email);
+    return _firstSuccessful([
+      () => _client.post('/api/users/me', body: body),
+      () => _client.post('/api/me', body: body),
+      () => _client.get('/api/me'),
+      () => _client.get('/api/wallet'),
+    ]);
+  }
+
+  Map<String, dynamic> _sessionLookupBody({String? email}) {
+    final token = _client.sessionToken;
+    return {
+      if (token != null && token.isNotEmpty) 'session_token': token,
+      if (email != null && email.isNotEmpty) 'email': email,
+    };
+  }
+
+  Future<Map<String, dynamic>> _firstSuccessful(
+    List<Future<Map<String, dynamic>> Function()> attempts,
+  ) async {
+    Object? lastError;
+    for (final attempt in attempts) {
+      try {
+        final data = await attempt();
+        if (data['ok'] == false) {
+          lastError = Exception(_apiError(data, 'Request failed'));
+          continue;
+        }
+        return data;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    throw lastError ?? Exception('Request failed');
+  }
+
+  /// Sends signup OTP. Account is created only after [confirmSignup].
+  /// [telegramId] is only sent when linking an existing Telegram user.
+  Future<Map<String, dynamic>> requestSignup({
+    String? telegramId,
     required String email,
     required String password,
-    String? name,
+    String? username,
   }) async {
     final data = await _client.post(
-      '/api/signup',
+      '/api/auth/signup/request',
       body: {
+        if (telegramId != null && telegramId.isNotEmpty)
+          'telegram_id': telegramId,
         'email': email,
         'password': password,
-        if (name != null && name.isNotEmpty) 'name': name,
+        if (username != null && username.isNotEmpty) 'username': username,
       },
     );
-    return AuthSession.fromJson(data);
+    if (data['ok'] == false) {
+      throw Exception(_apiError(data, 'Could not send verification code'));
+    }
+    return data;
   }
 
-  /// Sends a one-time code to the signup email.
-  /// Live response example:
-  /// `{ "ok": true, "email": "...", "expiresAt": "...", "emailVerified": false }`
+  /// Legacy name used by the OTP screen resend path.
   Future<Map<String, dynamic>> requestSignupEmailVerification({
+    String? telegramId,
     required String email,
-  }) async {
-    try {
-      final data = await _client.post(
-        '/api/signup/email-verification/request',
-        body: {'email': email},
-      );
-      if (data['ok'] == false) {
-        throw Exception(
-          data['error']?.toString() ?? 'Could not send verification code',
-        );
-      }
-      return data;
-    } on ApiException catch (e) {
-      if (e.statusCode == 404) {
-        throw Exception(
-          'Email verification is not available on the server yet. Ask backend to deploy POST /api/signup/email-verification/request',
-        );
-      }
-      rethrow;
-    }
+    required String password,
+    String? username,
+  }) {
+    return requestSignup(
+      telegramId: telegramId,
+      email: email,
+      password: password,
+      username: username,
+    );
   }
 
-  /// Confirms the email OTP from signup verification.
-  Future<UserModel?> confirmSignupEmailVerification({
+  Future<AuthSession> confirmSignup({
+    String? telegramId,
     required String email,
+    required String password,
     required String otp,
+    String? username,
   }) async {
-    try {
-      final data = await _client.post(
-        '/api/signup/email-verification/confirm',
-        body: {'email': email, 'otp': otp},
-      );
-      if (data['ok'] == false) {
-        throw Exception(
-          data['error']?.toString() ?? 'Invalid or expired verification code',
-        );
-      }
-      final userJson = data['user'];
-      if (userJson is Map<String, dynamic>) {
-        return UserModel.fromJson(userJson);
-      }
-      // Some responses may only return emailVerified flags without a user object.
-      if (data['emailVerified'] == true) {
-        return null;
-      }
-      return null;
-    } on ApiException catch (e) {
-      if (e.statusCode == 404) {
-        throw Exception(
-          'Email verification is not available on the server yet. Ask backend to deploy POST /api/signup/email-verification/confirm',
-        );
-      }
-      rethrow;
+    final data = await _client.post(
+      '/api/auth/signup/confirm',
+      body: {
+        if (telegramId != null && telegramId.isNotEmpty)
+          'telegram_id': telegramId,
+        'email': email,
+        'password': password,
+        'otp': otp,
+        if (username != null && username.isNotEmpty) 'username': username,
+      },
+    );
+    if (data['ok'] == false) {
+      throw Exception(_apiError(data, 'Invalid or expired verification code'));
     }
+    await _captureSessionToken(data);
+    return _sessionFromAuthResponse(data, email: email, username: username);
+  }
+
+  Future<UserModel?> confirmSignupEmailVerification({
+    String? telegramId,
+    required String email,
+    required String password,
+    required String otp,
+    String? username,
+  }) async {
+    final session = await confirmSignup(
+      telegramId: telegramId,
+      email: email,
+      password: password,
+      otp: otp,
+      username: username,
+    );
+    return session.user;
   }
 
   /// Verifies credentials and sends a login OTP. Session is created only after
@@ -112,22 +156,21 @@ class WalletApi {
     required String email,
     required String password,
   }) async {
-    final bypass = OtpBypass.isExempt(email);
     final data = await _client.post(
-      '/api/login',
-      body: {
-        'email': email,
-        'password': password,
-        if (bypass) 'skipOtp': true,
-      },
+      '/api/auth/login/request',
+      body: {'email': email, 'password': password},
     );
+    if (data['ok'] == false) {
+      throw Exception(_apiError(data, 'Login failed'));
+    }
     if (data['user'] != null) {
+      await _captureSessionToken(data);
       return {...data, 'loginOtpRequired': data['loginOtpRequired'] == true};
     }
     if (data['loginOtpRequired'] == true || data['ok'] == true) {
-      return data;
+      return {...data, 'loginOtpRequired': true};
     }
-    throw Exception(data['error']?.toString() ?? 'Login failed');
+    throw Exception(_apiError(data, 'Login failed'));
   }
 
   Future<AuthSession> confirmLoginEmailVerification({
@@ -135,37 +178,155 @@ class WalletApi {
     required String otp,
   }) async {
     final data = await _client.post(
-      '/api/login/email-verification/confirm',
+      '/api/auth/login/confirm',
       body: {'email': email, 'otp': otp},
     );
-    if (data['user'] == null) {
-      throw Exception(data['error']?.toString() ?? 'Invalid or expired code');
+    if (data['ok'] == false) {
+      throw Exception(_apiError(data, 'Invalid or expired code'));
     }
-    return AuthSession.fromJson(data);
+    await _captureSessionToken(data);
+    final session = _sessionFromAuthResponse(data, email: email);
+    if (session.user == null && data['token'] == null && data['access_token'] == null) {
+      throw Exception(_apiError(data, 'Invalid or expired code'));
+    }
+    return session;
+  }
+
+  Future<Map<String, dynamic>> checkUser({
+    String? telegramId,
+    String? email,
+    String? userId,
+  }) async {
+    final body = <String, dynamic>{
+      if (email != null && email.isNotEmpty) 'email': email,
+      if (userId != null && userId.isNotEmpty) 'user_id': userId,
+    };
+    // Only send a real NEX telegram id. A device-generated numeric id looks
+    // up the wrong user (or none) and must not replace the email lookup.
+    if (telegramId != null &&
+        telegramId.isNotEmpty &&
+        (telegramId.startsWith('futre:') ||
+            email == null ||
+            email.isEmpty)) {
+      body['telegram_id'] = telegramId;
+    }
+    if (body.isEmpty) {
+      throw Exception('Email or telegram id is required');
+    }
+    return _client.post('/api/users/check', body: body);
+  }
+
+  Future<void> _captureSessionToken(Map<String, dynamic> data) async {
+    final token = _readToken(data);
+    if (token != null) {
+      await _client.setSessionToken(token);
+    }
+  }
+
+  String? _readToken(Map<String, dynamic> data) {
+    for (final key in ['token', 'access_token', 'session_token', 'bearer']) {
+      final value = data[key];
+      if (value is String && value.isNotEmpty) return value;
+    }
+    final nested = data['session'];
+    if (nested is Map) {
+      final value = nested['token'] ?? nested['access_token'];
+      if (value is String && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  AuthSession _sessionFromAuthResponse(
+    Map<String, dynamic> data, {
+    required String email,
+    String? username,
+  }) {
+    final session = AuthSession.fromJson(data);
+    if (session.user != null) {
+      return session.user!.emailVerified == true
+          ? session
+          : AuthSession(
+              user: session.user!.copyWith(emailVerified: true),
+              wallet: session.wallet,
+              events: session.events,
+            );
+    }
+    return AuthSession(
+      user: UserModel(
+        id: int.tryParse('${data['user_id'] ?? data['id'] ?? 0}') ?? 0,
+        email: email,
+        name: username,
+        emailVerified: true,
+        telegramId: data['telegram_id']?.toString(),
+      ),
+      wallet: session.wallet,
+      events: session.events,
+    );
+  }
+
+  String _apiError(Map<String, dynamic> data, String fallback) {
+    return ApiException.describe(
+      error: data['error']?.toString(),
+      message: data['message']?.toString(),
+      fallback: fallback,
+    );
   }
 
   Future<void> requestForgotPassword({required String email}) async {
-    final data = await _client.post(
-      '/api/forgot-password/request',
-      body: {'email': email},
-    );
-    if (data['ok'] != true) {
-      throw Exception(data['error']?.toString() ?? 'Could not send reset code');
+    try {
+      final data = await _client.post(
+        '/api/auth/forgot-password/request',
+        body: {'email': email},
+      );
+      if (data['ok'] == false) {
+        final code = data['error']?.toString() ?? '';
+        // Never reveal whether the email exists.
+        if (_hidesAccountExistence(code)) return;
+        throw Exception(_apiError(data, 'Could not send reset code'));
+      }
+    } on ApiException catch (e) {
+      if (e.statusCode == 404 || _hidesAccountExistence(e.code ?? e.message)) {
+        return;
+      }
+      rethrow;
     }
   }
 
-  Future<void> confirmForgotPassword({
+  Future<DateTime?> confirmForgotPassword({
     required String email,
     required String otp,
     required String newPassword,
   }) async {
     final data = await _client.post(
-      '/api/forgot-password/confirm',
-      body: {'email': email, 'otp': otp, 'newPassword': newPassword},
+      '/api/auth/forgot-password/confirm',
+      body: {
+        'email': email,
+        'otp': otp.trim(),
+        'new_password': newPassword,
+        'newPassword': newPassword,
+      },
     );
-    if (data['ok'] != true) {
-      throw Exception(data['error']?.toString() ?? 'Password reset failed');
+    if (data['ok'] == false) {
+      throw Exception(_apiError(data, 'Password reset failed'));
     }
+    return _parseTimestamp(data['locked_until'] ?? data['lockedUntil']);
+  }
+
+  bool _hidesAccountExistence(String code) {
+    final value = code.toLowerCase();
+    return value.contains('not_found') ||
+        value.contains('unknown') ||
+        value.contains('no_account') ||
+        value.contains('account_not_found');
+  }
+
+  DateTime? _parseTimestamp(dynamic value) {
+    if (value == null) return null;
+    if (value is int) {
+      final ms = value > 2000000000 ? value : value * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true).toLocal();
+    }
+    return DateTime.tryParse(value.toString())?.toLocal();
   }
 
   Future<String?> requestAccountDelete({
@@ -176,8 +337,8 @@ class WalletApi {
       '/api/account/delete/request',
       body: {'email': email, 'password': password},
     );
-    if (data['ok'] != true) {
-      throw Exception(data['error']?.toString() ?? 'Could not send delete code');
+    if (data['ok'] == false) {
+      throw Exception(_apiError(data, 'Could not send delete code'));
     }
     return data['email']?.toString();
   }
@@ -191,8 +352,8 @@ class WalletApi {
       '/api/account/delete/confirm',
       body: {'email': email, 'password': password, 'otp': otp},
     );
-    if (data['ok'] != true) {
-      throw Exception(data['error']?.toString() ?? 'Account deletion failed');
+    if (data['ok'] == false) {
+      throw Exception(_apiError(data, 'Account deletion failed'));
     }
   }
 
@@ -218,9 +379,95 @@ class WalletApi {
     return UserModel.fromJson(userJson);
   }
 
-  Future<AuthSession> wallet() async {
-    final data = await _client.get('/api/wallet');
-    return AuthSession.fromJson(data);
+  Future<AuthSession> wallet({String? email}) async {
+    return liveWalletSession(email: email);
+  }
+
+  /// Same as [wallet] but keeps a raw payload for session cache.
+  Future<Map<String, dynamic>> walletRaw({String? email}) async {
+    return meRaw(email: email);
+  }
+
+  Future<AuthSession> liveWalletSession({String? email}) async {
+    AuthSession? combined;
+    Object? lastError;
+
+    Future<void> absorb(Future<Map<String, dynamic>> Function() load) async {
+      try {
+        final data = await load();
+        if (data['ok'] == false) {
+          lastError = Exception(_apiError(data, 'Could not load wallet'));
+          return;
+        }
+        final next = AuthSession.fromJson(data);
+        combined = combined == null ? next : combined!.merge(next);
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    bool isComplete() {
+      final session = combined;
+      if (session == null) return false;
+      return session.user != null &&
+          session.wallet.addresses.isNotEmpty &&
+          session.wallet.balances.isNotEmpty;
+    }
+
+    await absorb(() => _client.get('/api/wallet'));
+    if (!isComplete()) {
+      await absorb(
+        () => _client.post(
+          '/api/users/balance',
+          body: _sessionLookupBody(email: email),
+        ),
+      );
+    }
+    if (!isComplete()) {
+      await absorb(() => meRaw(email: email));
+    }
+
+    if (combined == null) {
+      // Surface the real failure (e.g. an expired session) so callers can tell
+      // a logout apart from a network hiccup.
+      throw lastError ?? Exception('Could not load wallet');
+    }
+    return combined!;
+  }
+
+  /// Ledger history: deposits, withdrawals, refunds and reconciliations.
+  ///
+  /// Prefers the session endpoints, then falls back to the developer lookup.
+  Future<List<ActivityItem>> ledgerHistory({
+    int limit = 50,
+    String? email,
+  }) async {
+    final data = await _firstSuccessful([
+      () => _client.get(
+        '/api/ledger-history',
+        queryParameters: {'limit': '$limit'},
+      ),
+      () => _client.get('/api/activity', queryParameters: {'limit': '$limit'}),
+      () => _client.post(
+        '/api/users/ledger',
+        body: {..._sessionLookupBody(email: email), 'limit': limit},
+      ),
+      () => _client.post(
+        '/api/users/ledger-history',
+        body: {..._sessionLookupBody(email: email), 'limit': limit},
+      ),
+    ]);
+
+    final rows =
+        data['history'] ??
+        data['ledger'] ??
+        data['activity'] ??
+        data['transactions'];
+    if (rows is! List) return const [];
+    return rows
+        .whereType<Map<String, dynamic>>()
+        .map(ActivityItem.fromJson)
+        .toList();
   }
 
   Future<Map<String, CryptoPrice>> cryptoPrices() async {
@@ -232,8 +479,21 @@ class WalletApi {
     return CryptoPricesSnapshot.fromJson(data);
   }
 
-  Future<Map<String, dynamic>> fees() async {
-    return _client.get('/api/fees');
+  /// `GET /api/fees`. Passing asset/network/amount returns the amount-aware
+  /// `selected` row, including per-user percentage overrides.
+  Future<Map<String, dynamic>> fees({
+    String? asset,
+    String? network,
+    double? amount,
+  }) async {
+    return _client.get(
+      '/api/fees',
+      queryParameters: {
+        if (asset != null && asset.isNotEmpty) 'asset': asset,
+        if (network != null && network.isNotEmpty) 'network': network,
+        if (amount != null && amount > 0) 'amount': amount.toString(),
+      },
+    );
   }
 
   Future<DepositAddressResult> depositAddress({
@@ -277,6 +537,44 @@ class WalletApi {
         .toList();
   }
 
+  /// Sends a Telegram-style popup via `POST /api/notifications/popup`.
+  ///
+  /// Do not pass [force] from normal app flows — that flag is for
+  /// backend/admin compliance warnings only.
+  Future<NotificationPopupResult> sendNotificationPopup({
+    required String title,
+    required String message,
+    bool force = false,
+    String? telegramId,
+    String? email,
+    String? userId,
+  }) async {
+    try {
+      final data = await _client.post(
+        '/api/notifications/popup',
+        body: {
+          'title': title,
+          'message': message,
+          if (force) 'force': true,
+          if (telegramId != null && telegramId.isNotEmpty)
+            'telegram_id': telegramId,
+          if (email != null && email.isNotEmpty) 'email': email,
+          if (userId != null && userId.isNotEmpty) 'user_id': userId,
+        },
+      );
+      return NotificationPopupResult.fromJson(data);
+    } on ApiException catch (error) {
+      if (error.code == 'user_restricted_or_blocked') {
+        return NotificationPopupResult(
+          ok: false,
+          error: 'user_restricted_or_blocked',
+          blocked: true,
+        );
+      }
+      rethrow;
+    }
+  }
+
   Future<void> registerDeviceToken({
     required String token,
     required String platform,
@@ -287,13 +585,24 @@ class WalletApi {
     );
   }
 
-  Future<AccountStatusInfo> accountStatus() async {
-    final data = await _client.get('/api/account-status');
-    final raw = data['accountStatus'];
-    if (raw is! Map<String, dynamic>) {
-      throw Exception('Invalid account status response');
+  Future<AccountStatusInfo> accountStatus({
+    String? email,
+    String? telegramId,
+  }) async {
+    final check = await checkUser(
+      email: email,
+      telegramId: telegramId,
+    );
+    final raw = check['user'];
+    if (raw is Map) {
+      return AccountStatusInfo.fromUserCheck(Map<String, dynamic>.from(raw));
     }
-    return AccountStatusInfo.fromJson(raw);
+    if (check.containsKey('restricted') ||
+        check.containsKey('can_withdraw') ||
+        check['ok'] == true) {
+      return AccountStatusInfo.fromUserCheck(Map<String, dynamic>.from(check));
+    }
+    throw Exception('Invalid users/check response');
   }
 
   Future<SupportTicket> createSupportTicket({

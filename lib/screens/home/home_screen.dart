@@ -6,7 +6,6 @@ import '../../providers/wallet_provider.dart';
 import '../../widgets/common.dart';
 import '../receive/receive_flow.dart';
 import '../send/send_flow.dart';
-import '../swap/swap_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -52,9 +51,15 @@ class HomeScreen extends StatelessWidget {
               onSend: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const SendFlow()),
               ),
-              onSwap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SwapScreen()),
-              ),
+              onSwap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Swap is temporarily unavailable. It will return in a later update.',
+                    ),
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 24),
             const SectionLabel('Your assets'),

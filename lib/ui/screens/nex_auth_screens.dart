@@ -119,7 +119,7 @@ class _NexSignupScreenState extends State<NexSignupScreen> {
             name: _name.text.trim(),
           );
       if (mounted) {
-        showNexToast(context, 'Account created — verify your email');
+        showNexToast(context, 'Verification code sent');
         widget.onSuccess();
       }
     } catch (e) {

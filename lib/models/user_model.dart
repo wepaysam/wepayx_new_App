@@ -6,12 +6,14 @@ class UserModel {
     this.createdAt,
     this.emailVerified,
     this.emailVerifiedAt,
+    this.telegramId,
   });
 
   final int id;
   final String email;
   final String? name;
   final String? createdAt;
+  final String? telegramId;
 
   /// Explicit backend flag when present. `null` means the API did not send it
   /// (legacy accounts) — the app then falls back to local verification state.
@@ -25,6 +27,7 @@ class UserModel {
     String? createdAt,
     bool? emailVerified,
     String? emailVerifiedAt,
+    String? telegramId,
   }) {
     return UserModel(
       id: id ?? this.id,
@@ -33,6 +36,7 @@ class UserModel {
       createdAt: createdAt ?? this.createdAt,
       emailVerified: emailVerified ?? this.emailVerified,
       emailVerifiedAt: emailVerifiedAt ?? this.emailVerifiedAt,
+      telegramId: telegramId ?? this.telegramId,
     );
   }
 
@@ -44,14 +48,18 @@ class UserModel {
       verified = json['email_verified'] == true;
     }
 
+    // The live API sends ids as strings ("123") on some routes and ints on
+    // others, so never cast directly.
+    final rawId = json['id'] ?? json['user_id'];
     return UserModel(
-      id: json['id'] as int? ?? int.tryParse('${json['id']}') ?? 0,
+      id: rawId is int ? rawId : int.tryParse('$rawId') ?? 0,
       email: json['email'] as String? ?? '',
-      name: json['name'] as String?,
+      name: (json['name'] ?? json['username']) as String?,
       createdAt: (json['created_at'] ?? json['createdAt']) as String?,
       emailVerified: verified,
       emailVerifiedAt:
           (json['emailVerifiedAt'] ?? json['email_verified_at'])?.toString(),
+      telegramId: (json['telegram_id'] ?? json['telegramId'])?.toString(),
     );
   }
 }

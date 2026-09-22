@@ -41,8 +41,14 @@ class _NexBootstrapHostState extends State<NexBootstrapHost> {
     return AppUpdateService.instance.checkForUpdate();
   }
 
-  Future<void> _boot() async {
-    final updateStatus = await _checkForRequiredUpdate();
+  Future<void> _watchForRequiredUpdate() async {
+    final AppUpdateStatus updateStatus;
+    try {
+      updateStatus = await _checkForRequiredUpdate();
+    } catch (e) {
+      debugPrint('AppUpdate: check failed: $e');
+      return;
+    }
     if (!mounted) return;
 
     debugPrint(
@@ -53,28 +59,38 @@ class _NexBootstrapHostState extends State<NexBootstrapHost> {
       'error=${updateStatus.error}',
     );
 
-    if (updateStatus.mustBlockApp) {
-      setState(() {
-        _forceUpdate = true;
-        _updateStatus = updateStatus;
-        _ready = true;
-      });
-      return;
-    }
+    if (!updateStatus.mustBlockApp) return;
+    setState(() {
+      _forceUpdate = true;
+      _updateStatus = updateStatus;
+      _ready = true;
+    });
+  }
+
+  Future<void> _boot({bool checkUpdate = true}) async {
+    // The update gate runs alongside boot so the loading screen never waits on
+    // the update server. Its verdict is applied as soon as it arrives.
+    if (checkUpdate) unawaited(_watchForRequiredUpdate());
 
     final wallet = context.read<WalletProvider>();
     final security = SecurityService.instance;
 
+    // Must settle before the first frame, otherwise the PIN lock would flash
+    // the wallet before it can cover it.
     await _safe('security', security.init, const Duration(seconds: 8));
-    await _safe(
-      'addressBook',
-      AddressBookService.instance.load,
-      const Duration(seconds: 5),
-    );
-    await _safe('wallet', wallet.bootstrap, const Duration(seconds: 45));
+
+    await Future.wait([
+      _safe(
+        'addressBook',
+        AddressBookService.instance.load,
+        const Duration(seconds: 5),
+      ),
+      _safe('wallet', wallet.bootstrap, const Duration(seconds: 45)),
+    ]);
 
     if (!mounted) return;
     setState(() => _ready = true);
+    if (_forceUpdate) return;
 
     unawaited(_safe('notifications', () async {
       await LocalNotificationService.instance.initialize(
@@ -109,7 +125,7 @@ class _NexBootstrapHostState extends State<NexBootstrapHost> {
       _updateStatus = null;
       _ready = false;
     });
-    await _boot();
+    await _boot(checkUpdate: false);
     return status;
   }
 
@@ -130,6 +146,22 @@ class _NexBootstrapHostState extends State<NexBootstrapHost> {
 
   @override
   Widget build(BuildContext context) {
+    // The mandatory-update gate outranks everything else, including boot state.
+    if (_forceUpdate && _updateStatus != null) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          brightness: Brightness.dark,
+          scaffoldBackgroundColor: const Color(0xFF060D1A),
+          colorScheme: const ColorScheme.dark(primary: Color(0xFF2DA8FF)),
+        ),
+        home: NexForceUpdateScreen(
+          status: _updateStatus!,
+          onRecheck: _recheckUpdate,
+        ),
+      );
+    }
+
     if (!_ready) {
       return MaterialApp(
         debugShowCheckedModeBanner: false,
@@ -173,21 +205,6 @@ class _NexBootstrapHostState extends State<NexBootstrapHost> {
               ],
             ),
           ),
-        ),
-      );
-    }
-
-    if (_forceUpdate && _updateStatus != null) {
-      return MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          brightness: Brightness.dark,
-          scaffoldBackgroundColor: const Color(0xFF060D1A),
-          colorScheme: const ColorScheme.dark(primary: Color(0xFF2DA8FF)),
-        ),
-        home: NexForceUpdateScreen(
-          status: _updateStatus!,
-          onRecheck: _recheckUpdate,
         ),
       );
     }

@@ -47,7 +47,13 @@ class _NexEmailVerificationScreenState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_requestedOnce) {
         _requestedOnce = true;
-        unawaited(_requestCode(auto: true));
+        final alreadySent =
+            context.read<WalletProvider>().signupOtpSent;
+        if (!alreadySent) {
+          unawaited(_requestCode(auto: true));
+        } else {
+          _startResendCooldown();
+        }
       }
       if (mounted) _focus.requestFocus();
     });
@@ -158,7 +164,7 @@ class _NexEmailVerificationScreenState
   @override
   Widget build(BuildContext context) {
     final t = NexThemeScope.of(context);
-    final email = context.watch<WalletProvider>().user?.email ?? '';
+    final email = context.watch<WalletProvider>().verificationEmail ?? '';
     final canResend = !_sending && _resendIn == 0;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
 

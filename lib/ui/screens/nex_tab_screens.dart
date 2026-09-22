@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -132,7 +134,8 @@ class _NexHomeScreenState extends State<NexHomeScreen> {
               ],
             ),
           ),
-          if (provider.accountStatus?.hasRestrictions == true)
+          if (provider.accountStatus?.hasRestrictions == true ||
+              provider.accountStatus?.hasSecurityHold == true)
             NexAccountRestrictionBanner(
               status: provider.accountStatus!,
               onSupport: widget.onAccountSupport,
@@ -885,6 +888,15 @@ class NexActivityScreen extends StatefulWidget {
 class _NexActivityScreenState extends State<NexActivityScreen> {
   String filter = 'All';
   static const filters = ['All', 'Sent', 'Received', 'Swapped'];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(context.read<WalletProvider>().refreshWallet());
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
